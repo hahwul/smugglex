@@ -1,0 +1,11 @@
+[package]
+name = "smugglex"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.53", features = ["derive"] }
+colored = "3.0.0"
+indicatif = "0.18.3"
+tokio = { version = "1.48.0", features = ["full"] }
+url = "2.5.7"
