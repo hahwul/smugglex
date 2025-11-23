@@ -41,6 +41,10 @@ struct Cli {
     /// Custom headers (format: "Header: Value")
     #[arg(short = 'H', long = "header")]
     headers: Vec<String>,
+
+    /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te)
+    #[arg(short = 'c', long = "checks")]
+    checks: Option<String>,
 }
 
 /// Result of a vulnerability check
@@ -325,7 +329,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let timeout = cli.timeout;
     let verbose = cli.verbose;
     let use_tls = url.scheme() == "https";
+    
+    // Parse checks filter
+    let checks_to_run: Vec<&str> = if let Some(ref checks_str) = cli.checks {
+        checks_str.split(',').map(|s| s.trim()).collect()
+    } else {
+        vec!["cl-te", "te-cl", "te-te"]
+    };
 
+    // Display banner
+    println!();
+    println!("{}", "╔═══════════════════════════════════════════╗".cyan());
+    println!("{}", "║  SmuggLeX - HTTP Request Smuggling Tool  ║".cyan().bold());
+    println!("{}", "╚═══════════════════════════════════════════╝".cyan());
     println!();
     println!("{} {}", "Target:".bold(), host.cyan());
     println!("{}   {}", "Method:".bold(), method.cyan());
@@ -340,6 +356,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(ref output_file) = cli.output {
         println!("{} {}", "Output:".bold(), output_file.cyan());
     }
+    println!("{} {}", "Checks:".bold(), checks_to_run.join(", ").to_uppercase().cyan());
     println!();
 
     let pb = ProgressBar::new_spinner();
@@ -362,56 +379,81 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut results = Vec::new();
 
-    let cl_te_payloads = get_cl_te_payloads(path, host, method, &cli.headers);
-    let result = run_checks_for_type(CheckParams {
-        pb: &pb,
-        check_name: "CL.TE",
-        host,
-        port,
-        path,
-        attack_requests: cl_te_payloads,
-        timeout,
-        verbose,
-        use_tls,
-    }).await?;
-    results.push(result);
-    pb.inc(1);
+    // Run CL.TE check if enabled
+    if checks_to_run.contains(&"cl-te") {
+        let cl_te_payloads = get_cl_te_payloads(path, host, method, &cli.headers);
+        let result = run_checks_for_type(CheckParams {
+            pb: &pb,
+            check_name: "CL.TE",
+            host,
+            port,
+            path,
+            attack_requests: cl_te_payloads,
+            timeout,
+            verbose,
+            use_tls,
+        }).await?;
+        results.push(result);
+        pb.inc(1);
+    }
 
-    let te_cl_payloads = get_te_cl_payloads(path, host, method, &cli.headers);
-    let result = run_checks_for_type(CheckParams {
-        pb: &pb,
-        check_name: "TE.CL",
-        host,
-        port,
-        path,
-        attack_requests: te_cl_payloads,
-        timeout,
-        verbose,
-        use_tls,
-    }).await?;
-    results.push(result);
-    pb.inc(1);
+    // Run TE.CL check if enabled
+    if checks_to_run.contains(&"te-cl") {
+        let te_cl_payloads = get_te_cl_payloads(path, host, method, &cli.headers);
+        let result = run_checks_for_type(CheckParams {
+            pb: &pb,
+            check_name: "TE.CL",
+            host,
+            port,
+            path,
+            attack_requests: te_cl_payloads,
+            timeout,
+            verbose,
+            use_tls,
+        }).await?;
+        results.push(result);
+        pb.inc(1);
+    }
 
-    let te_te_payloads = get_te_te_payloads(path, host, method, &cli.headers);
-    let result = run_checks_for_type(CheckParams {
-        pb: &pb,
-        check_name: "TE.TE",
-        host,
-        port,
-        path,
-        attack_requests: te_te_payloads,
-        timeout,
-        verbose,
-        use_tls,
-    }).await?;
-    results.push(result);
-    pb.inc(1);
+    // Run TE.TE check if enabled
+    if checks_to_run.contains(&"te-te") {
+        let te_te_payloads = get_te_te_payloads(path, host, method, &cli.headers);
+        let result = run_checks_for_type(CheckParams {
+            pb: &pb,
+            check_name: "TE.TE",
+            host,
+            port,
+            path,
+            attack_requests: te_te_payloads,
+            timeout,
+            verbose,
+            use_tls,
+        }).await?;
+        results.push(result);
+        pb.inc(1);
+    }
 
     if !verbose {
         pb.finish_with_message(format!("{} {}", "✔".green(), "Checks finished!".bold()));
     } else {
         println!("\n{}", "✔ Checks finished!".bold().green());
     }
+
+    // Print summary
+    println!("\n{}", "=== SCAN SUMMARY ===".bold());
+    let vulnerable_count = results.iter().filter(|r| r.vulnerable).count();
+    
+    if vulnerable_count > 0 {
+        println!("{} {} vulnerability(ies) found!", "⚠".red().bold(), vulnerable_count);
+        for result in &results {
+            if result.vulnerable {
+                println!("  {} {}: {}", "•".red(), result.check_type, "VULNERABLE".red().bold());
+            }
+        }
+    } else {
+        println!("{} No vulnerabilities detected", "✔".green().bold());
+    }
+    println!("{} {} checks completed", "✔".green(), results.len());
 
     // Save results to file if requested
     if let Some(output_file) = cli.output {
@@ -430,4 +472,84 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cl_te_payloads_generation() {
+        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[]);
+        assert!(!payloads.is_empty());
+        assert_eq!(payloads.len(), 6);
+        
+        // Check that all payloads contain required components
+        for payload in &payloads {
+            assert!(payload.contains("Content-Length: 6"));
+            assert!(payload.contains("Transfer-Encoding"));
+            assert!(payload.contains("POST /test HTTP/1.1"));
+            assert!(payload.contains("Host: example.com"));
+        }
+    }
+
+    #[test]
+    fn test_te_cl_payloads_generation() {
+        let payloads = get_te_cl_payloads("/api", "target.com", "GET", &[]);
+        assert!(!payloads.is_empty());
+        assert_eq!(payloads.len(), 6);
+        
+        for payload in &payloads {
+            assert!(payload.contains("Content-Length: 4"));
+            assert!(payload.contains("Transfer-Encoding"));
+            assert!(payload.contains("GET /api HTTP/1.1"));
+        }
+    }
+
+    #[test]
+    fn test_te_te_payloads_generation() {
+        let payloads = get_te_te_payloads("/", "site.com", "POST", &[]);
+        assert!(!payloads.is_empty());
+        assert_eq!(payloads.len(), 4);
+        
+        for payload in &payloads {
+            assert!(payload.contains("Transfer-Encoding"));
+            assert!(payload.contains("POST / HTTP/1.1"));
+        }
+    }
+
+    #[test]
+    fn test_custom_headers_integration() {
+        let custom_headers = vec![
+            "X-Custom-Header: value1".to_string(),
+            "Authorization: Bearer token".to_string(),
+        ];
+        
+        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &custom_headers);
+        
+        for payload in &payloads {
+            assert!(payload.contains("X-Custom-Header: value1"));
+            assert!(payload.contains("Authorization: Bearer token"));
+        }
+    }
+
+    #[test]
+    fn test_check_result_serialization() {
+        let result = CheckResult {
+            check_type: "CL.TE".to_string(),
+            vulnerable: false,
+            payload_index: None,
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: None,
+            normal_duration_ms: 150,
+            attack_duration_ms: None,
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+        };
+        
+        let json = serde_json::to_string(&result);
+        assert!(json.is_ok());
+        
+        let deserialized: Result<CheckResult, _> = serde_json::from_str(&json.unwrap());
+        assert!(deserialized.is_ok());
+    }
 }
