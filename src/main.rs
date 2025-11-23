@@ -161,37 +161,87 @@ async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult, Box
     let mut result_attack_status = None;
     let mut last_attack_duration = None;
     
+    // Threshold for detecting timing-based smuggling (3x slower than normal)
+    let timing_threshold = normal_duration.as_millis() * 3;
+    
     for (i, attack_request) in params.attack_requests.iter().enumerate() {
         match send_request(params.host, params.port, attack_request, params.timeout, params.verbose, params.use_tls).await {
             Ok((attack_response, attack_duration)) => {
-                last_attack_duration = Some(attack_duration); // Track duration of last attempt
+                last_attack_duration = Some(attack_duration);
                 let attack_status = attack_response.lines().next().unwrap_or("");
-                if attack_response.len() != normal_response.len() || attack_status != normal_status {
+                let attack_millis = attack_duration.as_millis();
+                
+                // Check for smuggling indicators:
+                // 1. Timeout/504 Gateway Timeout (desync causing hang)
+                // 2. Significantly delayed response (3x+ slower than baseline)
+                // 3. Connection timeout errors
+                let is_timeout_error = attack_status.contains("504") || 
+                                      attack_status.contains("Gateway Timeout") ||
+                                      attack_status.contains("408");
+                let is_delayed = attack_millis > timing_threshold && attack_millis > 1000; // At least 1 second AND 3x threshold
+                
+                if is_timeout_error || is_delayed {
                     vulnerable = true;
                     result_payload_index = Some(i);
                     result_attack_status = Some(attack_status.to_string());
                     
                     let result_text = format!("[!] {} Result:", params.check_name);
                     let vulnerable_text = "[!!!] VULNERABLE".red().bold();
+                    let reason = if is_timeout_error {
+                        "Timeout/504 response detected"
+                    } else {
+                        "Excessive delay detected (possible desync)"
+                    };
+                    
                     if params.verbose {
                         println!("\n{}", result_text.bold());
                         println!("  {}", vulnerable_text);
+                        println!("  {} Reason: {}", "[+] ".green(), reason.yellow());
                         println!("  {} Payload index: {}", "[+] ".green(), i);
-                        println!("  {} Normal response status: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration);
-                        println!("  {} Attack response status: {} (took {:.2?})", "[+] ".green(), attack_status, attack_duration);
+                        println!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration);
+                        println!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status, attack_duration);
                     } else {
                         params.pb.println(format!("\n{}", result_text.bold()));
                         params.pb.println(format!("  {}", vulnerable_text));
+                        params.pb.println(format!("  {} Reason: {}", "[+] ".green(), reason.yellow()));
                         params.pb.println(format!("  {} Payload index: {}", "[+] ".green(), i));
-                        params.pb.println(format!("  {} Normal response status: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration));
-                        params.pb.println(format!("  {} Attack response status: {} (took {:.2?})", "[+] ".green(), attack_status, attack_duration));
+                        params.pb.println(format!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration));
+                        params.pb.println(format!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status, attack_duration));
                     }
                     break;
                 }
             }
             Err(e) => {
-                 let error_text = format!("\n{} Error during {} attack request (payload {}): {}", "[!] ".yellow(), params.check_name, i, e);
-                 if params.verbose { println!("{}", error_text); } else { params.pb.println(error_text); }
+                // Check if error is a timeout (which could indicate smuggling)
+                let error_str = e.to_string();
+                if error_str.contains("timed out") || error_str.contains("timeout") {
+                    vulnerable = true;
+                    result_payload_index = Some(i);
+                    result_attack_status = Some("Connection Timeout".to_string());
+                    last_attack_duration = Some(Duration::from_secs(params.timeout));
+                    
+                    let result_text = format!("[!] {} Result:", params.check_name);
+                    let vulnerable_text = "[!!!] VULNERABLE".red().bold();
+                    if params.verbose {
+                        println!("\n{}", result_text.bold());
+                        println!("  {}", vulnerable_text);
+                        println!("  {} Reason: {}", "[+] ".green(), "Connection timeout (desync hang detected)".yellow());
+                        println!("  {} Payload index: {}", "[+] ".green(), i);
+                        println!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration);
+                        println!("  {} Attack request timed out after {:.2?}", "[+] ".green(), Duration::from_secs(params.timeout));
+                    } else {
+                        params.pb.println(format!("\n{}", result_text.bold()));
+                        params.pb.println(format!("  {}", vulnerable_text));
+                        params.pb.println(format!("  {} Reason: {}", "[+] ".green(), "Connection timeout (desync hang detected)".yellow()));
+                        params.pb.println(format!("  {} Payload index: {}", "[+] ".green(), i));
+                        params.pb.println(format!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration));
+                        params.pb.println(format!("  {} Attack request timed out after {:.2?}", "[+] ".green(), Duration::from_secs(params.timeout)));
+                    }
+                    break;
+                } else {
+                    let error_text = format!("\n{} Error during {} attack request (payload {}): {}", "[!] ".yellow(), params.check_name, i, e);
+                    if params.verbose { println!("{}", error_text); } else { params.pb.println(error_text); }
+                }
             }
         }
     }
