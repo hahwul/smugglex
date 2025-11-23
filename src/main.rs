@@ -176,10 +176,15 @@ async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult, Box
                 let attack_millis = attack_duration.as_millis();
                 
                 // Extract HTTP status code from status line (e.g., "HTTP/1.1 504 Gateway Timeout")
-                let status_code = attack_status_line
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|code| code.parse::<u16>().ok());
+                // Validate that it's a proper HTTP response before parsing
+                let status_code = if attack_status_line.starts_with("HTTP/") {
+                    attack_status_line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|code| code.parse::<u16>().ok())
+                } else {
+                    None
+                };
                 
                 // Check for smuggling indicators:
                 // 1. Timeout status codes (408 Request Timeout, 504 Gateway Timeout)
@@ -219,16 +224,16 @@ async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult, Box
                 }
             }
             Err(e) => {
-                // Check if error is a timeout error type
-                let is_timeout = e.source()
-                    .map(|source| {
-                        let source_str = source.to_string();
-                        source_str.contains("timed out") || source_str.contains("timeout")
-                    })
-                    .unwrap_or_else(|| {
-                        let error_str = e.to_string();
+                // Check if error is a timeout error by examining the error chain
+                // tokio timeout errors and IO timeout errors are the main indicators
+                let is_timeout = match e.downcast_ref::<tokio::time::error::Elapsed>() {
+                    Some(_) => true,
+                    None => {
+                        // Fallback to string matching if not a tokio timeout error
+                        let error_str = e.to_string().to_lowercase();
                         error_str.contains("timed out") || error_str.contains("timeout")
-                    });
+                    }
+                };
                 
                 if is_timeout {
                     vulnerable = true;
