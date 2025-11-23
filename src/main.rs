@@ -227,24 +227,20 @@ async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult, Box
             Err(e) => {
                 // Check if error is a timeout error by examining the error chain
                 // Priority: tokio timeout errors, then IO timeout errors, then string fallback
-                let is_timeout = if e.downcast_ref::<tokio::time::error::Elapsed>().is_some() {
-                    true
-                } else {
+                let is_timeout = e.downcast_ref::<tokio::time::error::Elapsed>().is_some() || {
                     // Check the error chain for IO timeout errors
                     let mut source = e.source();
                     let mut found_io_timeout = false;
                     while let Some(err) = source {
                         if let Some(io_err) = err.downcast_ref::<std::io::Error>() 
                             && io_err.kind() == std::io::ErrorKind::TimedOut {
-                                found_io_timeout = true;
-                                break;
-                            }
+                            found_io_timeout = true;
+                            break;
+                        }
                         source = err.source();
                     }
                     
-                    if found_io_timeout {
-                        true
-                    } else {
+                    found_io_timeout || {
                         // Last resort: string matching for other timeout errors
                         let error_str = e.to_string().to_lowercase();
                         error_str.contains("timed out") || error_str.contains("timeout")
