@@ -15,6 +15,10 @@ use url::Url;
 use chrono::Utc;
 use once_cell::sync::Lazy;
 
+// Detection thresholds
+const TIMING_MULTIPLIER: u128 = 3; // Flag if response is 3x slower than baseline
+const MIN_DELAY_MS: u128 = 1000;   // Minimum delay to consider (1 second)
+
 // Lazy static TLS configuration to avoid recreating for each request
 static TLS_CONFIG: Lazy<Arc<rustls::ClientConfig>> = Lazy::new(|| {
     let mut root_store = rustls::RootCertStore::empty();
@@ -161,34 +165,37 @@ async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult, Box
     let mut result_attack_status = None;
     let mut last_attack_duration = None;
     
-    // Threshold for detecting timing-based smuggling (3x slower than normal)
-    let timing_threshold = normal_duration.as_millis() * 3;
+    // Threshold for detecting timing-based smuggling
+    let timing_threshold = normal_duration.as_millis() * TIMING_MULTIPLIER;
     
     for (i, attack_request) in params.attack_requests.iter().enumerate() {
         match send_request(params.host, params.port, attack_request, params.timeout, params.verbose, params.use_tls).await {
             Ok((attack_response, attack_duration)) => {
                 last_attack_duration = Some(attack_duration);
-                let attack_status = attack_response.lines().next().unwrap_or("");
+                let attack_status_line = attack_response.lines().next().unwrap_or("");
                 let attack_millis = attack_duration.as_millis();
                 
+                // Extract HTTP status code from status line (e.g., "HTTP/1.1 504 Gateway Timeout")
+                let status_code = attack_status_line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|code| code.parse::<u16>().ok());
+                
                 // Check for smuggling indicators:
-                // 1. Timeout/504 Gateway Timeout (desync causing hang)
-                // 2. Significantly delayed response (3x+ slower than baseline)
-                // 3. Connection timeout errors
-                let is_timeout_error = attack_status.contains("504") || 
-                                      attack_status.contains("Gateway Timeout") ||
-                                      attack_status.contains("408");
-                let is_delayed = attack_millis > timing_threshold && attack_millis > 1000; // At least 1 second AND 3x threshold
+                // 1. Timeout status codes (408 Request Timeout, 504 Gateway Timeout)
+                // 2. Significantly delayed response (3x+ slower than baseline AND exceeds minimum threshold)
+                let is_timeout_error = matches!(status_code, Some(408) | Some(504));
+                let is_delayed = attack_millis > timing_threshold && attack_millis > MIN_DELAY_MS;
                 
                 if is_timeout_error || is_delayed {
                     vulnerable = true;
                     result_payload_index = Some(i);
-                    result_attack_status = Some(attack_status.to_string());
+                    result_attack_status = Some(attack_status_line.to_string());
                     
                     let result_text = format!("[!] {} Result:", params.check_name);
                     let vulnerable_text = "[!!!] VULNERABLE".red().bold();
                     let reason = if is_timeout_error {
-                        "Timeout/504 response detected"
+                        "Timeout status code detected (408/504)"
                     } else {
                         "Excessive delay detected (possible desync)"
                     };
@@ -199,22 +206,31 @@ async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult, Box
                         println!("  {} Reason: {}", "[+] ".green(), reason.yellow());
                         println!("  {} Payload index: {}", "[+] ".green(), i);
                         println!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration);
-                        println!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status, attack_duration);
+                        println!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status_line, attack_duration);
                     } else {
                         params.pb.println(format!("\n{}", result_text.bold()));
                         params.pb.println(format!("  {}", vulnerable_text));
                         params.pb.println(format!("  {} Reason: {}", "[+] ".green(), reason.yellow()));
                         params.pb.println(format!("  {} Payload index: {}", "[+] ".green(), i));
                         params.pb.println(format!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration));
-                        params.pb.println(format!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status, attack_duration));
+                        params.pb.println(format!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status_line, attack_duration));
                     }
                     break;
                 }
             }
             Err(e) => {
-                // Check if error is a timeout (which could indicate smuggling)
-                let error_str = e.to_string();
-                if error_str.contains("timed out") || error_str.contains("timeout") {
+                // Check if error is a timeout error type
+                let is_timeout = e.source()
+                    .map(|source| {
+                        let source_str = source.to_string();
+                        source_str.contains("timed out") || source_str.contains("timeout")
+                    })
+                    .unwrap_or_else(|| {
+                        let error_str = e.to_string();
+                        error_str.contains("timed out") || error_str.contains("timeout")
+                    });
+                
+                if is_timeout {
                     vulnerable = true;
                     result_payload_index = Some(i);
                     result_attack_status = Some("Connection Timeout".to_string());
