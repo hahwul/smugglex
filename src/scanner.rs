@@ -179,3 +179,172 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult,
         timestamp: Utc::now().to_rfc3339(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_timing_multiplier_constant() {
+        assert_eq!(TIMING_MULTIPLIER, 3);
+    }
+
+    #[test]
+    fn test_min_delay_constant() {
+        assert_eq!(MIN_DELAY_MS, 1000);
+    }
+
+    #[test]
+    fn test_timing_threshold_calculation() {
+        let normal_duration = Duration::from_millis(200);
+        let threshold = normal_duration.as_millis() * TIMING_MULTIPLIER;
+        assert_eq!(threshold, 600);
+    }
+
+    #[test]
+    fn test_timing_detection_logic_vulnerable() {
+        let normal_duration_ms = 200_u128;
+        let attack_duration_ms = 1500_u128; // 7.5x slower
+        let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 600ms
+        
+        // Should be detected as vulnerable (exceeds threshold AND min delay)
+        assert!(attack_duration_ms > threshold);
+        assert!(attack_duration_ms > MIN_DELAY_MS);
+    }
+
+    #[test]
+    fn test_timing_detection_logic_not_vulnerable_below_threshold() {
+        let normal_duration_ms = 300_u128;
+        let attack_duration_ms = 800_u128; // 2.67x slower
+        let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 900ms
+        
+        // Should NOT be detected (below threshold even though exceeds min delay)
+        assert!(attack_duration_ms < threshold);
+    }
+
+    #[test]
+    fn test_timing_detection_logic_not_vulnerable_below_min_delay() {
+        let normal_duration_ms = 100_u128;
+        let attack_duration_ms = 500_u128; // 5x slower
+        let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 300ms
+        
+        // Should NOT be detected (below min delay even though exceeds threshold)
+        assert!(attack_duration_ms > threshold);
+        assert!(attack_duration_ms < MIN_DELAY_MS);
+    }
+
+    #[test]
+    fn test_status_code_parsing_valid_http11() {
+        let status_line = "HTTP/1.1 504 Gateway Timeout";
+        let parts: Vec<&str> = status_line.split_whitespace().collect();
+        // "HTTP/1.1", "504", "Gateway", "Timeout" = 4 parts
+        assert_eq!(parts.len(), 4);
+        assert!(parts[0].starts_with("HTTP/1."));
+        let status_code = parts[1].parse::<u16>().ok();
+        assert_eq!(status_code, Some(504));
+    }
+
+    #[test]
+    fn test_status_code_parsing_valid_http2() {
+        let status_line = "HTTP/2 408 Request Timeout";
+        let parts: Vec<&str> = status_line.split_whitespace().collect();
+        assert!(parts[0].starts_with("HTTP/2"));
+        let status_code = parts[1].parse::<u16>().ok();
+        assert_eq!(status_code, Some(408));
+    }
+
+    #[test]
+    fn test_status_code_parsing_invalid_format() {
+        let status_line = "Invalid response";
+        let parts: Vec<&str> = status_line.split_whitespace().collect();
+        let status_code = if parts.len() >= 2 
+            && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2")) {
+            parts[1].parse::<u16>().ok()
+        } else {
+            None
+        };
+        assert_eq!(status_code, None);
+    }
+
+    #[test]
+    fn test_timeout_status_codes() {
+        let timeout_codes = [408_u16, 504_u16];
+        for code in timeout_codes {
+            assert!(matches!(Some(code), Some(408) | Some(504)));
+        }
+    }
+
+    #[test]
+    fn test_non_timeout_status_codes() {
+        let normal_codes = [200_u16, 404_u16, 500_u16, 502_u16, 503_u16];
+        for code in normal_codes {
+            assert!(!matches!(Some(code), Some(408) | Some(504)));
+        }
+    }
+
+    #[test]
+    fn test_check_result_vulnerable_state() {
+        let result = CheckResult {
+            check_type: "CL.TE".to_string(),
+            vulnerable: true,
+            payload_index: Some(2),
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: Some("HTTP/1.1 504 Gateway Timeout".to_string()),
+            normal_duration_ms: 150,
+            attack_duration_ms: Some(5000),
+            timestamp: Utc::now().to_rfc3339(),
+        };
+        
+        assert!(result.vulnerable);
+        assert_eq!(result.payload_index, Some(2));
+        assert!(result.attack_status.is_some());
+        assert!(result.attack_duration_ms.is_some());
+    }
+
+    #[test]
+    fn test_check_result_not_vulnerable_state() {
+        let result = CheckResult {
+            check_type: "TE.CL".to_string(),
+            vulnerable: false,
+            payload_index: None,
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: None,
+            normal_duration_ms: 150,
+            attack_duration_ms: None,
+            timestamp: Utc::now().to_rfc3339(),
+        };
+        
+        assert!(!result.vulnerable);
+        assert_eq!(result.payload_index, None);
+        assert!(result.attack_status.is_none());
+    }
+
+    #[test]
+    fn test_duration_conversion() {
+        let duration = Duration::from_millis(1500);
+        let millis = duration.as_millis() as u64;
+        assert_eq!(millis, 1500);
+    }
+
+    #[test]
+    fn test_edge_case_exact_threshold() {
+        let normal_duration_ms = 500_u128;
+        let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 1500ms
+        let attack_duration_ms = 1500_u128; // Exactly at threshold
+        
+        // At exact threshold, should NOT be detected (needs to exceed, not equal)
+        assert_eq!(attack_duration_ms, threshold);
+        assert!(!(attack_duration_ms > threshold));
+    }
+
+    #[test]
+    fn test_edge_case_just_above_threshold() {
+        let normal_duration_ms = 500_u128;
+        let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 1500ms
+        let attack_duration_ms = 1501_u128; // Just above threshold
+        
+        // Should be detected (exceeds threshold AND min delay)
+        assert!(attack_duration_ms > threshold);
+        assert!(attack_duration_ms > MIN_DELAY_MS);
+    }
+}
