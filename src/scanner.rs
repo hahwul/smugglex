@@ -1,14 +1,15 @@
+use crate::error::{Result, SmugglexError};
 use crate::http::send_request;
 use crate::model::CheckResult;
 use chrono::Utc;
 use colored::*;
 use indicatif::ProgressBar;
-use std::error::Error;
+
 use std::time::Duration;
 
 // Detection thresholds
 const TIMING_MULTIPLIER: u128 = 3; // Flag if response is 3x slower than baseline
-const MIN_DELAY_MS: u128 = 1000;   // Minimum delay to consider (1 second)
+const MIN_DELAY_MS: u128 = 1000; // Minimum delay to consider (1 second)
 
 /// Parameters for running vulnerability checks
 pub struct CheckParams<'a> {
@@ -24,57 +25,80 @@ pub struct CheckParams<'a> {
 }
 
 /// Runs a set of attack requests for a given check type.
-pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult, Box<dyn Error>> {
+pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult> {
     if !params.verbose {
-        params.pb.set_message(format!("Checking for {}...", params.check_name));
+        params
+            .pb
+            .set_message(format!("Checking for {}...", params.check_name));
     } else {
-        println!("\n{}", format!("[!] Checking for {} vulnerability", params.check_name).bold());
+        println!(
+            "\n{}",
+            format!("[!] Checking for {} vulnerability", params.check_name).bold()
+        );
     }
-    
-    let (normal_response, normal_duration) = send_request(params.host, params.port, &format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        params.path, params.host
-    ), params.timeout, params.verbose, params.use_tls).await?;
+
+    let (normal_response, normal_duration) = send_request(
+        params.host,
+        params.port,
+        &format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            params.path, params.host
+        ),
+        params.timeout,
+        params.verbose,
+        params.use_tls,
+    )
+    .await?;
     let normal_status = normal_response.lines().next().unwrap_or("").to_string();
 
     let mut vulnerable = false;
     let mut result_payload_index = None;
     let mut result_attack_status = None;
     let mut last_attack_duration = None;
-    
+
     // Threshold for detecting timing-based smuggling
     let timing_threshold = normal_duration.as_millis() * TIMING_MULTIPLIER;
-    
+
     for (i, attack_request) in params.attack_requests.iter().enumerate() {
-        match send_request(params.host, params.port, attack_request, params.timeout, params.verbose, params.use_tls).await {
+        match send_request(
+            params.host,
+            params.port,
+            attack_request,
+            params.timeout,
+            params.verbose,
+            params.use_tls,
+        )
+        .await
+        {
             Ok((attack_response, attack_duration)) => {
                 last_attack_duration = Some(attack_duration);
                 let attack_status_line = attack_response.lines().next().unwrap_or("");
                 let attack_millis = attack_duration.as_millis();
-                
+
                 // Extract HTTP status code from status line (e.g., "HTTP/1.1 504 Gateway Timeout")
                 // Validate proper HTTP response format before parsing
                 let status_code = {
                     let parts: Vec<&str> = attack_status_line.split_whitespace().collect();
-                    if parts.len() >= 2 
-                        && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2")) {
+                    if parts.len() >= 2
+                        && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2"))
+                    {
                         parts[1].parse::<u16>().ok()
                     } else {
                         None
                     }
                 };
-                
+
                 // Check for smuggling indicators:
                 // 1. Timeout status codes (408 Request Timeout, 504 Gateway Timeout)
                 // 2. Significantly delayed response (3x+ slower than baseline AND exceeds minimum threshold)
                 let is_timeout_error = matches!(status_code, Some(408) | Some(504));
                 let is_delayed = attack_millis > timing_threshold && attack_millis > MIN_DELAY_MS;
-                
+
                 if is_timeout_error || is_delayed {
                     vulnerable = true;
                     result_payload_index = Some(i);
                     result_attack_status = Some(attack_status_line.to_string());
-                    
+
                     let result_text = format!("[!] {} Result:", params.check_name);
                     let vulnerable_text = "[!!!] VULNERABLE".red().bold();
                     let reason = if is_timeout_error {
@@ -82,75 +106,124 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult,
                     } else {
                         "Excessive delay detected (possible desync)"
                     };
-                    
+
                     if params.verbose {
                         println!("\n{}", result_text.bold());
                         println!("  {}", vulnerable_text);
                         println!("  {} Reason: {}", "[+] ".green(), reason.yellow());
                         println!("  {} Payload index: {}", "[+] ".green(), i);
-                        println!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration);
-                        println!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status_line, attack_duration);
+                        println!(
+                            "  {} Normal response: {} (took {:.2?})",
+                            "[+] ".green(),
+                            normal_status,
+                            normal_duration
+                        );
+                        println!(
+                            "  {} Attack response: {} (took {:.2?})",
+                            "[+] ".green(),
+                            attack_status_line,
+                            attack_duration
+                        );
                     } else {
                         params.pb.println(format!("\n{}", result_text.bold()));
                         params.pb.println(format!("  {}", vulnerable_text));
-                        params.pb.println(format!("  {} Reason: {}", "[+] ".green(), reason.yellow()));
-                        params.pb.println(format!("  {} Payload index: {}", "[+] ".green(), i));
-                        params.pb.println(format!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration));
-                        params.pb.println(format!("  {} Attack response: {} (took {:.2?})", "[+] ".green(), attack_status_line, attack_duration));
+                        params.pb.println(format!(
+                            "  {} Reason: {}",
+                            "[+] ".green(),
+                            reason.yellow()
+                        ));
+                        params
+                            .pb
+                            .println(format!("  {} Payload index: {}", "[+] ".green(), i));
+                        params.pb.println(format!(
+                            "  {} Normal response: {} (took {:.2?})",
+                            "[+] ".green(),
+                            normal_status,
+                            normal_duration
+                        ));
+                        params.pb.println(format!(
+                            "  {} Attack response: {} (took {:.2?})",
+                            "[+] ".green(),
+                            attack_status_line,
+                            attack_duration
+                        ));
                     }
                     break;
                 }
             }
             Err(e) => {
-                // Check if error is a timeout error by examining the error chain
-                // Priority: tokio timeout errors, then IO timeout errors, then string fallback
-                let is_timeout = e.downcast_ref::<tokio::time::error::Elapsed>().is_some() || {
-                    // Check the error chain for IO timeout errors
-                    let mut source = e.source();
-                    let mut found_io_timeout = false;
-                    while let Some(err) = source {
-                        if let Some(io_err) = err.downcast_ref::<std::io::Error>() 
-                            && io_err.kind() == std::io::ErrorKind::TimedOut {
-                            found_io_timeout = true;
-                            break;
-                        }
-                        source = err.source();
-                    }
-                    
-                    found_io_timeout || {
-                        // Last resort: string matching for other timeout errors
-                        let error_str = e.to_string().to_lowercase();
-                        error_str.contains("timed out") || error_str.contains("timeout")
-                    }
+                // Check if error is a timeout error
+                let is_timeout = matches!(e, SmugglexError::Timeout(_)) || {
+                    // Check for timeout in error message
+                    let error_str = e.to_string().to_lowercase();
+                    error_str.contains("timed out") || error_str.contains("timeout")
                 };
-                
+
                 if is_timeout {
                     vulnerable = true;
                     result_payload_index = Some(i);
                     result_attack_status = Some("Connection Timeout".to_string());
                     last_attack_duration = Some(Duration::from_secs(params.timeout));
-                    
+
                     let result_text = format!("[!] {} Result:", params.check_name);
                     let vulnerable_text = "[!!!] VULNERABLE".red().bold();
                     if params.verbose {
                         println!("\n{}", result_text.bold());
                         println!("  {}", vulnerable_text);
-                        println!("  {} Reason: {}", "[+] ".green(), "Connection timeout (desync hang detected)".yellow());
+                        println!(
+                            "  {} Reason: {}",
+                            "[+] ".green(),
+                            "Connection timeout (desync hang detected)".yellow()
+                        );
                         println!("  {} Payload index: {}", "[+] ".green(), i);
-                        println!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration);
-                        println!("  {} Attack request timed out after {:.2?}", "[+] ".green(), Duration::from_secs(params.timeout));
+                        println!(
+                            "  {} Normal response: {} (took {:.2?})",
+                            "[+] ".green(),
+                            normal_status,
+                            normal_duration
+                        );
+                        println!(
+                            "  {} Attack request timed out after {:.2?}",
+                            "[+] ".green(),
+                            Duration::from_secs(params.timeout)
+                        );
                     } else {
                         params.pb.println(format!("\n{}", result_text.bold()));
                         params.pb.println(format!("  {}", vulnerable_text));
-                        params.pb.println(format!("  {} Reason: {}", "[+] ".green(), "Connection timeout (desync hang detected)".yellow()));
-                        params.pb.println(format!("  {} Payload index: {}", "[+] ".green(), i));
-                        params.pb.println(format!("  {} Normal response: {} (took {:.2?})", "[+] ".green(), normal_status, normal_duration));
-                        params.pb.println(format!("  {} Attack request timed out after {:.2?}", "[+] ".green(), Duration::from_secs(params.timeout)));
+                        params.pb.println(format!(
+                            "  {} Reason: {}",
+                            "[+] ".green(),
+                            "Connection timeout (desync hang detected)".yellow()
+                        ));
+                        params
+                            .pb
+                            .println(format!("  {} Payload index: {}", "[+] ".green(), i));
+                        params.pb.println(format!(
+                            "  {} Normal response: {} (took {:.2?})",
+                            "[+] ".green(),
+                            normal_status,
+                            normal_duration
+                        ));
+                        params.pb.println(format!(
+                            "  {} Attack request timed out after {:.2?}",
+                            "[+] ".green(),
+                            Duration::from_secs(params.timeout)
+                        ));
                     }
                     break;
                 } else {
-                    let error_text = format!("\n{} Error during {} attack request (payload {}): {}", "[!] ".yellow(), params.check_name, i, e);
-                    if params.verbose { println!("{}", error_text); } else { params.pb.println(error_text); }
+                    let error_text = format!(
+                        "\n{} Error during {} attack request (payload {}): {}",
+                        "[!] ".yellow(),
+                        params.check_name,
+                        i,
+                        e
+                    );
+                    if params.verbose {
+                        println!("{}", error_text);
+                    } else {
+                        params.pb.println(error_text);
+                    }
                 }
             }
         }
@@ -206,7 +279,7 @@ mod tests {
         let normal_duration_ms = 200_u128;
         let attack_duration_ms = 1500_u128; // 7.5x slower
         let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 600ms
-        
+
         // Should be detected as vulnerable (exceeds threshold AND min delay)
         assert!(attack_duration_ms > threshold);
         assert!(attack_duration_ms > MIN_DELAY_MS);
@@ -217,7 +290,7 @@ mod tests {
         let normal_duration_ms = 300_u128;
         let attack_duration_ms = 800_u128; // 2.67x slower
         let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 900ms
-        
+
         // Should NOT be detected (below threshold even though exceeds min delay)
         assert!(attack_duration_ms < threshold);
     }
@@ -227,7 +300,7 @@ mod tests {
         let normal_duration_ms = 100_u128;
         let attack_duration_ms = 500_u128; // 5x slower
         let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 300ms
-        
+
         // Should NOT be detected (below min delay even though exceeds threshold)
         assert!(attack_duration_ms > threshold);
         assert!(attack_duration_ms < MIN_DELAY_MS);
@@ -257,8 +330,9 @@ mod tests {
     fn test_status_code_parsing_invalid_format() {
         let status_line = "Invalid response";
         let parts: Vec<&str> = status_line.split_whitespace().collect();
-        let status_code = if parts.len() >= 2 
-            && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2")) {
+        let status_code = if parts.len() >= 2
+            && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2"))
+        {
             parts[1].parse::<u16>().ok()
         } else {
             None
@@ -294,7 +368,7 @@ mod tests {
             attack_duration_ms: Some(5000),
             timestamp: Utc::now().to_rfc3339(),
         };
-        
+
         assert!(result.vulnerable);
         assert_eq!(result.payload_index, Some(2));
         assert!(result.attack_status.is_some());
@@ -313,7 +387,7 @@ mod tests {
             attack_duration_ms: None,
             timestamp: Utc::now().to_rfc3339(),
         };
-        
+
         assert!(!result.vulnerable);
         assert_eq!(result.payload_index, None);
         assert!(result.attack_status.is_none());
@@ -331,7 +405,7 @@ mod tests {
         let normal_duration_ms = 500_u128;
         let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 1500ms
         let attack_duration_ms = 1500_u128; // Exactly at threshold
-        
+
         // At exact threshold, should NOT be detected (needs to exceed, not equal)
         assert_eq!(attack_duration_ms, threshold);
         assert!(!(attack_duration_ms > threshold));
@@ -342,7 +416,7 @@ mod tests {
         let normal_duration_ms = 500_u128;
         let threshold = normal_duration_ms * TIMING_MULTIPLIER; // 1500ms
         let attack_duration_ms = 1501_u128; // Just above threshold
-        
+
         // Should be detected (exceeds threshold AND min delay)
         assert!(attack_duration_ms > threshold);
         assert!(attack_duration_ms > MIN_DELAY_MS);

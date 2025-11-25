@@ -1,4 +1,5 @@
 mod cli;
+mod error;
 mod http;
 mod model;
 mod payloads;
@@ -8,19 +9,19 @@ use chrono::Utc;
 use clap::Parser;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::time::Duration;
 use url::Url;
 
 use crate::cli::Cli;
+use crate::error::Result;
 use crate::model::ScanResults;
 use crate::payloads::{get_cl_te_payloads, get_te_cl_payloads, get_te_te_payloads};
-use crate::scanner::{run_checks_for_type, CheckParams};
+use crate::scanner::{CheckParams, run_checks_for_type};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let url = Url::parse(&cli.url)?;
@@ -42,15 +43,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Display banner
     println!();
     println!("{}", "╔═══════════════════════════════════════════╗".cyan());
-    println!("{}", "║  SmuggLeX - HTTP Request Smuggling Tool  ║".cyan().bold());
+    println!(
+        "{}",
+        "║  SmuggLeX - HTTP Request Smuggling Tool  ║".cyan().bold()
+    );
     println!("{}", "╚═══════════════════════════════════════════╝".cyan());
     println!();
     println!("{} {}", "Target:".bold(), host.cyan());
     println!("{}   {}", "Method:".bold(), method.cyan());
     println!("{} {}", "Timeout:".bold(), format!("{}s", timeout).cyan());
-    println!("{} {}", "Protocol:".bold(), if use_tls { "HTTPS".cyan() } else { "HTTP".cyan() });
+    println!(
+        "{} {}",
+        "Protocol:".bold(),
+        if use_tls {
+            "HTTPS".cyan()
+        } else {
+            "HTTP".cyan()
+        }
+    );
     if !cli.headers.is_empty() {
-        println!("{} {}", "Custom Headers:".bold(), cli.headers.len().to_string().cyan());
+        println!(
+            "{} {}",
+            "Custom Headers:".bold(),
+            cli.headers.len().to_string().cyan()
+        );
     }
     if verbose {
         println!("{} {}", "Verbose:".bold(), "Enabled".cyan());
@@ -58,7 +74,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(ref output_file) = cli.output {
         println!("{} {}", "Output:".bold(), output_file.cyan());
     }
-    println!("{} {}", "Checks:".bold(), checks_to_run.join(", ").to_uppercase().cyan());
+    println!(
+        "{} {}",
+        "Checks:".bold(),
+        checks_to_run.join(", ").to_uppercase().cyan()
+    );
     println!();
 
     let pb = ProgressBar::new_spinner();
@@ -67,13 +87,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pb.set_style(
             ProgressStyle::with_template("{spinner:.blue} {msg}")
                 .unwrap()
-                .tick_strings(&[
-                    "▸▹▹▹▹",
-                    "▹▸▹▹▹",
-                    "▹▹▸▹▹",
-                    "▹▹▹▸▹",
-                    "▹▹▹▹▸",
-                ]),
+                .tick_strings(&["▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸"]),
         );
     } else {
         pb.finish_and_clear();
@@ -149,10 +163,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let vulnerable_count = results.iter().filter(|r| r.vulnerable).count();
 
     if vulnerable_count > 0 {
-        println!("{} {} vulnerability(ies) found!", "⚠".red().bold(), vulnerable_count);
+        println!(
+            "{} {} vulnerability(ies) found!",
+            "⚠".red().bold(),
+            vulnerable_count
+        );
         for result in &results {
             if result.vulnerable {
-                println!("  {} {}: {}", "•".red(), result.check_type, "VULNERABLE".red().bold());
+                println!(
+                    "  {} {}: {}",
+                    "•".red(),
+                    result.check_type,
+                    "VULNERABLE".red().bold()
+                );
             }
         }
     } else {
@@ -173,7 +196,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut file = fs::File::create(&output_file)?;
         file.write_all(json_output.as_bytes())?;
 
-        println!("\n{} Results saved to: {}", "✔".green().bold(), output_file.cyan());
+        println!(
+            "\n{} Results saved to: {}",
+            "✔".green().bold(),
+            output_file.cyan()
+        );
     }
 
     Ok(())

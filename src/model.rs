@@ -43,7 +43,10 @@ mod tests {
         assert!(result.vulnerable);
         assert_eq!(result.payload_index, Some(3));
         assert_eq!(result.normal_status, "HTTP/1.1 200 OK");
-        assert_eq!(result.attack_status, Some("HTTP/1.1 504 Gateway Timeout".to_string()));
+        assert_eq!(
+            result.attack_status,
+            Some("HTTP/1.1 504 Gateway Timeout".to_string())
+        );
         assert_eq!(result.normal_duration_ms, 200);
         assert_eq!(result.attack_duration_ms, Some(5000));
     }
@@ -82,7 +85,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&result).expect("Failed to serialize");
-        
+
         // Verify JSON contains expected fields
         assert!(json.contains("\"check_type\":\"TE.TE\""));
         assert!(json.contains("\"vulnerable\":true"));
@@ -104,7 +107,7 @@ mod tests {
         }"#;
 
         let result: CheckResult = serde_json::from_str(json).expect("Failed to deserialize");
-        
+
         assert_eq!(result.check_type, "CL.TE");
         assert!(result.vulnerable);
         assert_eq!(result.payload_index, Some(2));
@@ -126,7 +129,7 @@ mod tests {
         };
 
         let cloned = result.clone();
-        
+
         assert_eq!(result.check_type, cloned.check_type);
         assert_eq!(result.vulnerable, cloned.vulnerable);
         assert_eq!(result.payload_index, cloned.payload_index);
@@ -191,7 +194,7 @@ mod tests {
         };
 
         let json = serde_json::to_string_pretty(&scan_results).expect("Failed to serialize");
-        
+
         assert!(json.contains("\"target\":"));
         assert!(json.contains("\"method\":"));
         assert!(json.contains("\"timestamp\":"));
@@ -220,7 +223,7 @@ mod tests {
         }"#;
 
         let scan_results: ScanResults = serde_json::from_str(json).expect("Failed to deserialize");
-        
+
         assert_eq!(scan_results.target, "http://test.com");
         assert_eq!(scan_results.method, "POST");
         assert_eq!(scan_results.checks.len(), 1);
@@ -237,10 +240,10 @@ mod tests {
         };
 
         assert_eq!(scan_results.checks.len(), 0);
-        
+
         let json = serde_json::to_string(&scan_results).expect("Failed to serialize");
         let deserialized: ScanResults = serde_json::from_str(&json).expect("Failed to deserialize");
-        
+
         assert_eq!(deserialized.checks.len(), 0);
     }
 
@@ -287,7 +290,7 @@ mod tests {
         };
 
         assert_eq!(scan_results.checks.len(), 3);
-        
+
         let vulnerable_count = scan_results.checks.iter().filter(|c| c.vulnerable).count();
         assert_eq!(vulnerable_count, 2);
     }
@@ -295,7 +298,7 @@ mod tests {
     #[test]
     fn test_check_result_different_check_types() {
         let check_types = vec!["CL.TE", "TE.CL", "TE.TE"];
-        
+
         for check_type in check_types {
             let result = CheckResult {
                 check_type: check_type.to_string(),
@@ -307,7 +310,7 @@ mod tests {
                 attack_duration_ms: None,
                 timestamp: "2024-01-01T12:00:00Z".to_string(),
             };
-            
+
             assert_eq!(result.check_type, check_type);
         }
     }
@@ -325,9 +328,9 @@ mod tests {
             attack_duration_ms: Some(15000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
         };
-        
+
         assert!(result1.attack_status.as_ref().unwrap().contains("504"));
-        
+
         // Scenario 2: Connection timeout
         let result2 = CheckResult {
             check_type: "TE.CL".to_string(),
@@ -339,7 +342,10 @@ mod tests {
             attack_duration_ms: Some(10000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
         };
-        
-        assert_eq!(result2.attack_status, Some("Connection Timeout".to_string()));
+
+        assert_eq!(
+            result2.attack_status,
+            Some("Connection Timeout".to_string())
+        );
     }
 }

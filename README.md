@@ -2,6 +2,13 @@
 
 A powerful HTTP Request Smuggling testing tool written in Rust.
 
+## Recent Improvements
+
+- **Code Refactoring**: Eliminated code duplication in payload generation functions, introduced custom error types for better error handling, and improved code readability with helper functions and better formatting.
+- **Error Handling**: Replaced generic `Box<dyn Error>` with custom `SmugglexError` enum for more specific error types.
+- **CI/CD**: Added GitHub Actions workflow for automated testing, linting, and building across multiple platforms and Rust versions.
+- **Code Quality**: Enhanced test coverage, applied rustfmt for consistent formatting, and resolved clippy warnings.
+
 ## Features
 
 - **Multiple Attack Types**: Tests for CL.TE, TE.CL, and TE.TE smuggling vulnerabilities
