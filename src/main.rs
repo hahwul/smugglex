@@ -4,6 +4,7 @@ mod http;
 mod model;
 mod payloads;
 mod scanner;
+mod utils;
 
 use chrono::Utc;
 use clap::Parser;
@@ -19,6 +20,7 @@ use crate::error::Result;
 use crate::model::ScanResults;
 use crate::payloads::{get_cl_te_payloads, get_te_cl_payloads, get_te_te_payloads};
 use crate::scanner::{CheckParams, run_checks_for_type};
+use crate::utils::fetch_cookies;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,6 +34,9 @@ async fn main() -> Result<()> {
     let timeout = cli.timeout;
     let verbose = cli.verbose;
     let use_tls = url.scheme() == "https";
+    
+    // Determine the actual host header to use (vhost overrides URL hostname)
+    let host_header = cli.vhost.as_deref().unwrap_or(host);
 
     // Parse checks filter
     let checks_to_run: Vec<&str> = if let Some(ref checks_str) = cli.checks {
@@ -50,6 +55,9 @@ async fn main() -> Result<()> {
     println!("{}", "╚═══════════════════════════════════════════╝".cyan());
     println!();
     println!("{} {}", "Target:".bold(), host.cyan());
+    if cli.vhost.is_some() {
+        println!("{} {}", "Virtual Host:".bold(), host_header.cyan());
+    }
     println!("{}   {}", "Method:".bold(), method.cyan());
     println!("{} {}", "Timeout:".bold(), format!("{}s", timeout).cyan());
     println!(
@@ -74,11 +82,40 @@ async fn main() -> Result<()> {
     if let Some(ref output_file) = cli.output {
         println!("{} {}", "Output:".bold(), output_file.cyan());
     }
+    if let Some(ref export_dir) = cli.export_dir {
+        println!("{} {}", "Export Dir:".bold(), export_dir.cyan());
+    }
     println!(
         "{} {}",
         "Checks:".bold(),
         checks_to_run.join(", ").to_uppercase().cyan()
     );
+    
+    // Fetch cookies if requested
+    let cookies = if cli.use_cookies {
+        println!("\n{} Fetching cookies...", "[*]".yellow().bold());
+        match fetch_cookies(host, port, path, use_tls, timeout, verbose).await {
+            Ok(fetched_cookies) if !fetched_cookies.is_empty() => {
+                println!(
+                    "{} Found {} cookie(s)",
+                    "[+]".green().bold(),
+                    fetched_cookies.len()
+                );
+                fetched_cookies
+            }
+            Ok(_) => {
+                println!("{} No cookies found", "[!]".yellow().bold());
+                Vec::new()
+            }
+            Err(e) => {
+                println!("{} Failed to fetch cookies: {}", "[!]".yellow().bold(), e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    
     println!();
 
     let pb = ProgressBar::new_spinner();
@@ -97,7 +134,7 @@ async fn main() -> Result<()> {
 
     // Run CL.TE check if enabled
     if checks_to_run.contains(&"cl-te") {
-        let cl_te_payloads = get_cl_te_payloads(path, host, method, &cli.headers);
+        let cl_te_payloads = get_cl_te_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
             check_name: "CL.TE",
@@ -108,6 +145,7 @@ async fn main() -> Result<()> {
             timeout,
             verbose,
             use_tls,
+            export_dir: cli.export_dir.as_deref(),
         })
         .await?;
         results.push(result);
@@ -116,7 +154,7 @@ async fn main() -> Result<()> {
 
     // Run TE.CL check if enabled
     if checks_to_run.contains(&"te-cl") {
-        let te_cl_payloads = get_te_cl_payloads(path, host, method, &cli.headers);
+        let te_cl_payloads = get_te_cl_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
             check_name: "TE.CL",
@@ -127,6 +165,7 @@ async fn main() -> Result<()> {
             timeout,
             verbose,
             use_tls,
+            export_dir: cli.export_dir.as_deref(),
         })
         .await?;
         results.push(result);
@@ -135,7 +174,7 @@ async fn main() -> Result<()> {
 
     // Run TE.TE check if enabled
     if checks_to_run.contains(&"te-te") {
-        let te_te_payloads = get_te_te_payloads(path, host, method, &cli.headers);
+        let te_te_payloads = get_te_te_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
             check_name: "TE.TE",
@@ -146,6 +185,7 @@ async fn main() -> Result<()> {
             timeout,
             verbose,
             use_tls,
+            export_dir: cli.export_dir.as_deref(),
         })
         .await?;
         results.push(result);

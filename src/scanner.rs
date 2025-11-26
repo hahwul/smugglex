@@ -1,6 +1,7 @@
 use crate::error::{Result, SmugglexError};
 use crate::http::send_request;
 use crate::model::CheckResult;
+use crate::utils::export_payload;
 use chrono::Utc;
 use colored::*;
 use indicatif::ProgressBar;
@@ -22,6 +23,7 @@ pub struct CheckParams<'a> {
     pub timeout: u64,
     pub verbose: bool,
     pub use_tls: bool,
+    pub export_dir: Option<&'a str>,
 }
 
 /// Runs a set of attack requests for a given check type.
@@ -106,6 +108,33 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                     } else {
                         "Excessive delay detected (possible desync)"
                     };
+                    
+                    // Export payload if export_dir is specified
+                    if let Some(export_dir) = params.export_dir {
+                        match export_payload(
+                            export_dir,
+                            params.host,
+                            params.check_name,
+                            i,
+                            attack_request,
+                            params.use_tls,
+                        ) {
+                            Ok(filename) => {
+                                if params.verbose {
+                                    println!("  {} Payload exported to: {}", "[+] ".green(), filename.cyan());
+                                } else {
+                                    params.pb.println(format!("  {} Payload exported to: {}", "[+] ".green(), filename.cyan()));
+                                }
+                            }
+                            Err(e) => {
+                                if params.verbose {
+                                    println!("  {} Failed to export payload: {}", "[!] ".yellow(), e);
+                                } else {
+                                    params.pb.println(format!("  {} Failed to export payload: {}", "[!] ".yellow(), e));
+                                }
+                            }
+                        }
+                    }
 
                     if params.verbose {
                         println!("\n{}", result_text.bold());
@@ -167,6 +196,34 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
 
                     let result_text = format!("[!] {} Result:", params.check_name);
                     let vulnerable_text = "[!!!] VULNERABLE".red().bold();
+                    
+                    // Export payload if export_dir is specified
+                    if let Some(export_dir) = params.export_dir {
+                        match export_payload(
+                            export_dir,
+                            params.host,
+                            params.check_name,
+                            i,
+                            attack_request,
+                            params.use_tls,
+                        ) {
+                            Ok(filename) => {
+                                if params.verbose {
+                                    println!("  {} Payload exported to: {}", "[+] ".green(), filename.cyan());
+                                } else {
+                                    params.pb.println(format!("  {} Payload exported to: {}", "[+] ".green(), filename.cyan()));
+                                }
+                            }
+                            Err(e) => {
+                                if params.verbose {
+                                    println!("  {} Failed to export payload: {}", "[!] ".yellow(), e);
+                                } else {
+                                    params.pb.println(format!("  {} Failed to export payload: {}", "[!] ".yellow(), e));
+                                }
+                            }
+                        }
+                    }
+                    
                     if params.verbose {
                         println!("\n{}", result_text.bold());
                         println!("  {}", vulnerable_text);

