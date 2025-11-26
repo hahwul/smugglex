@@ -21,18 +21,16 @@ pub async fn fetch_cookies(
     let mut cookies = Vec::new();
     for line in response.lines() {
         let line_lower = line.to_lowercase();
-        if line_lower.starts_with("set-cookie:") {
-            if let Some(cookie_value) = line.split(':').nth(1) {
-                // Extract just the cookie name=value, stop at semicolon
-                let cookie_part = cookie_value
-                    .trim()
-                    .split(';')
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                if !cookie_part.is_empty() {
-                    cookies.push(cookie_part);
-                }
+        if line_lower.starts_with("set-cookie:") && let Some(cookie_value) = line.split(':').nth(1) {
+            // Extract just the cookie name=value, stop at semicolon
+            let cookie_part = cookie_value
+                .trim()
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if !cookie_part.is_empty() {
+                cookies.push(cookie_part);
             }
         }
     }
@@ -73,13 +71,15 @@ mod tests {
     #[test]
     fn test_export_payload_creates_file() {
         use std::path::Path;
+        use std::env;
         
-        let temp_dir = "/tmp/smugglex_test_export";
-        let _ = fs::remove_dir_all(temp_dir); // Clean up if exists
+        let temp_dir = env::temp_dir().join("smugglex_test_export");
+        let temp_dir_str = temp_dir.to_str().unwrap();
+        let _ = fs::remove_dir_all(temp_dir_str); // Clean up if exists
 
         let payload = "POST / HTTP/1.1\r\nHost: example.com\r\n\r\n";
         let result = export_payload(
-            temp_dir,
+            temp_dir_str,
             "example.com",
             "CLTE",
             0,
@@ -95,16 +95,19 @@ mod tests {
         assert_eq!(content, payload);
 
         // Cleanup
-        let _ = fs::remove_dir_all(temp_dir);
+        let _ = fs::remove_dir_all(temp_dir_str);
     }
 
     #[test]
     fn test_export_payload_sanitizes_hostname() {
-        let temp_dir = "/tmp/smugglex_test_sanitize";
-        let _ = fs::remove_dir_all(temp_dir);
+        use std::env;
+        
+        let temp_dir = env::temp_dir().join("smugglex_test_sanitize");
+        let temp_dir_str = temp_dir.to_str().unwrap();
+        let _ = fs::remove_dir_all(temp_dir_str);
 
         let result = export_payload(
-            temp_dir,
+            temp_dir_str,
             "sub.example.com:8080",
             "TECL",
             1,
@@ -122,6 +125,6 @@ mod tests {
         assert!(filename.contains("_1.txt"));
 
         // Cleanup
-        let _ = fs::remove_dir_all(temp_dir);
+        let _ = fs::remove_dir_all(temp_dir_str);
     }
 }
