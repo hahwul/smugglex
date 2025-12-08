@@ -34,8 +34,14 @@ async fn main() -> Result<()> {
         // Read URLs from stdin (pipeline)
         let stdin = io::stdin();
         stdin.lock().lines()
-            .filter_map(|line| line.ok())
-            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| match line {
+                Ok(l) if !l.trim().is_empty() => Some(l),
+                Err(e) => {
+                    eprintln!("{} Error reading from stdin: {}", "[!]".yellow().bold(), e);
+                    None
+                }
+                _ => None,
+            })
             .collect()
     } else {
         // No URL and no stdin - print help and exit
@@ -51,7 +57,10 @@ async fn main() -> Result<()> {
 
     // Process each URL
     for target_url in urls {
-        process_url(&target_url, &cli).await?;
+        if let Err(e) = process_url(&target_url, &cli).await {
+            eprintln!("{} Error processing {}: {}", "[!]".red().bold(), target_url, e);
+            // Continue processing remaining URLs
+        }
     }
 
     Ok(())
