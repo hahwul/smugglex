@@ -467,6 +467,17 @@ fn contains_te_header_pattern(payload: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for HTTP request smuggling payload generation
+    //! 
+    //! This module contains comprehensive tests for:
+    //! - CL.TE (Content-Length vs Transfer-Encoding) payload generation
+    //! - TE.CL (Transfer-Encoding vs Content-Length) payload generation
+    //! - TE.TE (Transfer-Encoding obfuscation) payload generation
+    //! - Transfer-Encoding header variations and mutations
+    //! - PortSwigger http-request-smuggler pattern compatibility
+    //! - Custom headers and cookies formatting
+    //! - Payload structure and HTTP compliance
+
     use super::*;
     use crate::model::CheckResult;
 

@@ -98,6 +98,15 @@ pub fn log(level: LogLevel, message: &str) {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for utility functions
+    //! 
+    //! This module contains tests for:
+    //! - Payload export functionality
+    //! - Hostname sanitization for file names
+    //! - Directory creation and file management
+    //! - Multiple file exports
+    //! - Protocol handling (HTTP/HTTPS)
+
     use super::*;
     use std::env;
     use std::path::Path;

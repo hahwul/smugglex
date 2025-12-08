@@ -46,6 +46,17 @@ pub struct Cli {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for CLI argument parsing
+    //! 
+    //! This module contains tests for:
+    //! - URL parsing (single, multiple, with paths/ports)
+    //! - Command-line option parsing
+    //! - Default values validation
+    //! - Custom headers and cookies options
+    //! - Check type selection
+    //! - Virtual host and export options
+    //! - HTTP method variations
+
     use super::*;
 
     #[test]

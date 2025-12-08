@@ -24,6 +24,16 @@ pub struct ScanResults {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for data models and serialization
+    //! 
+    //! This module contains tests for:
+    //! - CheckResult creation and validation
+    //! - ScanResults aggregation
+    //! - JSON serialization and deserialization
+    //! - Edge cases (large durations, special characters)
+    //! - Different check types and status codes
+    //! - Clone implementation
+
     use super::*;
 
     /// Helper function to create a test CheckResult
