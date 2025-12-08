@@ -30,15 +30,15 @@ pub struct Cli {
     /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te)
     #[arg(short = 'c', long = "checks")]
     pub checks: Option<String>,
-    
+
     /// Virtual host to use in Host header (overrides URL hostname)
     #[arg(long = "vhost")]
     pub vhost: Option<String>,
-    
+
     /// Fetch and append cookies from initial request
     #[arg(long = "cookies", action = clap::ArgAction::SetTrue)]
     pub use_cookies: bool,
-    
+
     /// Export payloads to directory when vulnerabilities are found
     #[arg(long = "export-payloads")]
     pub export_dir: Option<String>,

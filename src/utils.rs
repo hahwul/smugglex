@@ -23,7 +23,9 @@ pub async fn fetch_cookies(
     let mut cookies = Vec::new();
     for line in response.lines() {
         let line_lower = line.to_lowercase();
-        if line_lower.starts_with("set-cookie:") && let Some(cookie_value) = line.split(':').nth(1) {
+        if line_lower.starts_with("set-cookie:")
+            && let Some(cookie_value) = line.split(':').nth(1)
+        {
             // Extract just the cookie name=value, stop at semicolon
             let cookie_part = cookie_value
                 .trim()
@@ -95,27 +97,20 @@ mod tests {
 
     #[test]
     fn test_export_payload_creates_file() {
-        use std::path::Path;
         use std::env;
-        
+        use std::path::Path;
+
         let temp_dir = env::temp_dir().join("smugglex_test_export");
         let temp_dir_str = temp_dir.to_str().unwrap();
         let _ = fs::remove_dir_all(temp_dir_str); // Clean up if exists
 
         let payload = "POST / HTTP/1.1\r\nHost: example.com\r\n\r\n";
-        let result = export_payload(
-            temp_dir_str,
-            "example.com",
-            "CLTE",
-            0,
-            payload,
-            true,
-        );
+        let result = export_payload(temp_dir_str, "example.com", "CLTE", 0, payload, true);
 
         assert!(result.is_ok());
         let filename = result.unwrap();
         assert!(Path::new(&filename).exists());
-        
+
         let content = fs::read_to_string(&filename).unwrap();
         assert_eq!(content, payload);
 
@@ -126,7 +121,7 @@ mod tests {
     #[test]
     fn test_export_payload_sanitizes_hostname() {
         use std::env;
-        
+
         let temp_dir = env::temp_dir().join("smugglex_test_sanitize");
         let temp_dir_str = temp_dir.to_str().unwrap();
         let _ = fs::remove_dir_all(temp_dir_str);
@@ -142,7 +137,7 @@ mod tests {
 
         assert!(result.is_ok());
         let filename = result.unwrap();
-        
+
         // Filename should have sanitized host
         assert!(filename.contains("sub_example_com_8080"));
         assert!(filename.contains("http_")); // Not https

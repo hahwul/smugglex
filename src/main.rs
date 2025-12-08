@@ -20,7 +20,7 @@ use crate::error::Result;
 use crate::model::ScanResults;
 use crate::payloads::{get_cl_te_payloads, get_te_cl_payloads, get_te_te_payloads};
 use crate::scanner::{CheckParams, run_checks_for_type};
-use crate::utils::{fetch_cookies, log, LogLevel};
+use crate::utils::{LogLevel, fetch_cookies, log};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,7 +33,9 @@ async fn main() -> Result<()> {
     } else if !io::stdin().is_terminal() {
         // Read URLs from stdin (pipeline)
         let stdin = io::stdin();
-        stdin.lock().lines()
+        stdin
+            .lock()
+            .lines()
             .filter_map(|line| match line {
                 Ok(l) if !l.trim().is_empty() => Some(l),
                 Err(e) => {
@@ -58,7 +60,10 @@ async fn main() -> Result<()> {
     // Process each URL
     for target_url in urls {
         if let Err(e) = process_url(&target_url, &cli).await {
-            log(LogLevel::Error, &format!("error processing {}: {}", target_url, e));
+            log(
+                LogLevel::Error,
+                &format!("error processing {}: {}", target_url, e),
+            );
             // Continue processing remaining URLs
         }
     }
@@ -68,7 +73,7 @@ async fn main() -> Result<()> {
 
 async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
     let start_time = std::time::Instant::now();
-    
+
     let url = Url::parse(target_url)?;
     let host = url.host_str().ok_or("Invalid host")?;
     let port = url.port_or_known_default().ok_or("Invalid port")?;
@@ -77,7 +82,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
     let timeout = cli.timeout;
     let verbose = cli.verbose;
     let use_tls = url.scheme() == "https";
-    
+
     // Determine the actual host header to use (vhost overrides URL hostname)
     let host_header = cli.vhost.as_deref().unwrap_or(host);
 
@@ -90,12 +95,15 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
 
     // Start scan log
     log(LogLevel::Info, &format!("start scan to {}", target_url));
-    
+
     // Fetch cookies if requested
     let cookies = if cli.use_cookies {
         match fetch_cookies(host, port, path, use_tls, timeout, verbose).await {
             Ok(fetched_cookies) if !fetched_cookies.is_empty() => {
-                log(LogLevel::Info, &format!("found {} cookie(s)", fetched_cookies.len()));
+                log(
+                    LogLevel::Info,
+                    &format!("found {} cookie(s)", fetched_cookies.len()),
+                );
                 fetched_cookies
             }
             Ok(_) => {
@@ -105,7 +113,10 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                 Vec::new()
             }
             Err(e) => {
-                log(LogLevel::Warning, &format!("failed to fetch cookies: {}", e));
+                log(
+                    LogLevel::Warning,
+                    &format!("failed to fetch cookies: {}", e),
+                );
                 Vec::new()
             }
         }
@@ -193,26 +204,32 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
 
     // Count vulnerabilities found
     let vulnerable_count = results.iter().filter(|r| r.vulnerable).count();
-    
+
     // Log results
     if vulnerable_count > 0 {
-        log(LogLevel::Warning, &format!("smuggling found {} vulnerability(ies)", vulnerable_count));
-        
+        log(
+            LogLevel::Warning,
+            &format!("smuggling found {} vulnerability(ies)", vulnerable_count),
+        );
+
         // Show detailed information for each vulnerability
         println!();
         for result in &results {
             if result.vulnerable {
-                println!("{}", format!("=== {} Vulnerability Details ===", result.check_type).bold());
+                println!(
+                    "{}",
+                    format!("=== {} Vulnerability Details ===", result.check_type).bold()
+                );
                 println!("{} {}", "Status:".bold(), "VULNERABLE".red().bold());
-                
+
                 if let Some(idx) = result.payload_index {
                     println!("{} {}", "Payload Index:".bold(), idx);
                 }
-                
+
                 if let Some(ref attack_status) = result.attack_status {
                     println!("{} {}", "Attack Response:".bold(), attack_status);
                 }
-                
+
                 if let Some(attack_duration_ms) = result.attack_duration_ms {
                     println!(
                         "{} Normal: {}ms, Attack: {}ms",
@@ -221,7 +238,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                         attack_duration_ms
                     );
                 }
-                
+
                 // Show HTTP raw request if payload was exported
                 if let Some(export_dir) = cli.export_dir.as_deref() {
                     if let Some(idx) = result.payload_index {
@@ -232,7 +249,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                             "{}/{}_{}_{}_{}.txt",
                             export_dir, protocol, sanitized_host, result.check_type, idx
                         );
-                        
+
                         if let Ok(payload_content) = fs::read_to_string(&filename) {
                             println!("\n{}", "HTTP Raw Request:".bold());
                             println!("{}", "─".repeat(60).dimmed());
@@ -241,17 +258,23 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                         }
                     }
                 }
-                
+
                 println!();
             }
         }
     } else {
-        log(LogLevel::Info, &format!("smuggling found {} vulnerabilities", vulnerable_count));
+        log(
+            LogLevel::Info,
+            &format!("smuggling found {} vulnerabilities", vulnerable_count),
+        );
     }
 
     // Log scan completion with duration
     let duration = start_time.elapsed();
-    log(LogLevel::Info, &format!("scan completed in {:.3} seconds", duration.as_secs_f64()));
+    log(
+        LogLevel::Info,
+        &format!("scan completed in {:.3} seconds", duration.as_secs_f64()),
+    );
 
     // Save results to file if requested
     if let Some(ref output_file) = cli.output {

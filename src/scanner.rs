@@ -95,7 +95,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                     vulnerable = true;
                     result_payload_index = Some(i);
                     result_attack_status = Some(attack_status_line.to_string());
-                    
+
                     // Export payload if export_dir is specified
                     if let Some(export_dir) = params.export_dir {
                         match export_payload(
@@ -111,7 +111,11 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                             }
                             Err(e) => {
                                 if params.verbose {
-                                    println!("  {} Failed to export payload: {}", "[!] ".yellow(), e);
+                                    println!(
+                                        "  {} Failed to export payload: {}",
+                                        "[!] ".yellow(),
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -132,7 +136,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                     result_payload_index = Some(i);
                     result_attack_status = Some("Connection Timeout".to_string());
                     last_attack_duration = Some(Duration::from_secs(params.timeout));
-                    
+
                     // Export payload if export_dir is specified
                     if let Some(export_dir) = params.export_dir {
                         match export_payload(
@@ -148,7 +152,11 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                             }
                             Err(e) => {
                                 if params.verbose {
-                                    println!("  {} Failed to export payload: {}", "[!] ".yellow(), e);
+                                    println!(
+                                        "  {} Failed to export payload: {}",
+                                        "[!] ".yellow(),
+                                        e
+                                    );
                                 }
                             }
                         }
