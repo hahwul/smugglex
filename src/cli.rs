@@ -5,8 +5,7 @@ use clap::Parser;
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     /// Target URL
-    #[arg(required = true)]
-    pub url: String,
+    pub url: Option<String>,
 
     /// Custom method for the attack request
     #[arg(short, long, default_value = "POST")]

@@ -11,7 +11,7 @@ use clap::Parser;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
-use std::io::Write;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
 use url::Url;
 
@@ -26,7 +26,48 @@ use crate::utils::fetch_cookies;
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let url = Url::parse(&cli.url)?;
+    // Determine URLs to scan
+    let urls: Vec<String> = if let Some(ref url) = cli.url {
+        // URL provided via command line
+        vec![url.clone()]
+    } else if !io::stdin().is_terminal() {
+        // Read URLs from stdin (pipeline)
+        let stdin = io::stdin();
+        stdin.lock().lines()
+            .filter_map(|line| match line {
+                Ok(l) if !l.trim().is_empty() => Some(l),
+                Err(e) => {
+                    eprintln!("{} Error reading from stdin: {}", "[!]".yellow().bold(), e);
+                    None
+                }
+                _ => None,
+            })
+            .collect()
+    } else {
+        // No URL and no stdin - print help and exit
+        Cli::parse_from(&["smugglex", "--help"]);
+        return Ok(());
+    };
+
+    // If no valid URLs were found, exit
+    if urls.is_empty() {
+        eprintln!("{} No valid URLs provided", "[!]".yellow().bold());
+        return Ok(());
+    }
+
+    // Process each URL
+    for target_url in urls {
+        if let Err(e) = process_url(&target_url, &cli).await {
+            eprintln!("{} Error processing {}: {}", "[!]".red().bold(), target_url, e);
+            // Continue processing remaining URLs
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
+    let url = Url::parse(target_url)?;
     let host = url.host_str().ok_or("Invalid host")?;
     let port = url.port_or_known_default().ok_or("Invalid port")?;
     let path = url.path();
@@ -224,16 +265,16 @@ async fn main() -> Result<()> {
     println!("{} {} checks completed", "✔".green(), results.len());
 
     // Save results to file if requested
-    if let Some(output_file) = cli.output {
+    if let Some(ref output_file) = cli.output {
         let scan_results = ScanResults {
-            target: cli.url.clone(),
+            target: target_url.to_string(),
             method: method.clone(),
             timestamp: Utc::now().to_rfc3339(),
             checks: results,
         };
 
         let json_output = serde_json::to_string_pretty(&scan_results)?;
-        let mut file = fs::File::create(&output_file)?;
+        let mut file = fs::File::create(output_file)?;
         file.write_all(json_output.as_bytes())?;
 
         println!(
