@@ -470,6 +470,15 @@ mod tests {
     use super::*;
     use crate::model::CheckResult;
 
+    // Test helper functions to expose private functions for testing
+    pub(crate) fn format_custom_headers_test_helper(custom_headers: &[String]) -> String {
+        format_custom_headers(custom_headers)
+    }
+
+    pub(crate) fn format_cookies_test_helper(cookies: &[String]) -> String {
+        format_cookies(cookies)
+    }
+
     #[test]
     fn test_cl_te_payloads_generation() {
         let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[], &[]);
@@ -1117,6 +1126,83 @@ mod tests {
                 "Cookie header should be properly formatted"
             );
         }
+    }
+
+    #[test]
+    fn test_format_custom_headers_single() {
+        let headers = vec!["X-Custom: value".to_string()];
+        let result = format_custom_headers_test_helper(&headers);
+        assert_eq!(result, "X-Custom: value\r\n");
+    }
+
+    #[test]
+    fn test_format_custom_headers_multiple() {
+        let headers = vec![
+            "X-Custom-1: value1".to_string(),
+            "X-Custom-2: value2".to_string(),
+            "Authorization: Bearer token".to_string(),
+        ];
+        let result = format_custom_headers_test_helper(&headers);
+        assert_eq!(result, "X-Custom-1: value1\r\nX-Custom-2: value2\r\nAuthorization: Bearer token\r\n");
+    }
+
+    #[test]
+    fn test_format_cookies_single() {
+        let cookies = vec!["session=abc123".to_string()];
+        let result = format_cookies_test_helper(&cookies);
+        assert_eq!(result, "Cookie: session=abc123\r\n");
+    }
+
+    #[test]
+    fn test_format_cookies_multiple() {
+        let cookies = vec![
+            "session=abc123".to_string(),
+            "user=test".to_string(),
+            "preferences=dark".to_string(),
+        ];
+        let result = format_cookies_test_helper(&cookies);
+        assert_eq!(result, "Cookie: session=abc123; user=test; preferences=dark\r\n");
+    }
+
+    #[test]
+    fn test_contains_te_header_pattern_standard() {
+        let payload = "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+        assert!(
+            contains_te_header_pattern(payload),
+            "Standard Transfer-Encoding header should be detected"
+        );
+    }
+
+    #[test]
+    fn test_contains_te_header_pattern_obfuscated() {
+        // Test various obfuscation patterns
+        let patterns = vec![
+            "Transfer_Encoding: chunked",     // Underscore
+            "Transfer Encoding: chunked",     // Space
+            "transfer-encoding: chunked",     // Lowercase
+            "TRANSFER-ENCODING: CHUNKED",     // Uppercase
+            "Transfer-Encoding:chunked",      // No space
+            "Transfer-%45ncoding: chunked",   // URL-encoded
+            "Content-Encoding: chunked",      // Content-Encoding confusion
+            "Tra\rnsfer-Encoding: chunked",   // CR in name
+        ];
+
+        for pattern in patterns {
+            assert!(
+                contains_te_header_pattern(pattern),
+                "Pattern '{}' should be detected",
+                pattern
+            );
+        }
+    }
+
+    #[test]
+    fn test_contains_te_header_pattern_negative() {
+        let payload = "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\n";
+        assert!(
+            !contains_te_header_pattern(payload),
+            "Payload without Transfer-Encoding should not be detected"
+        );
     }
 
     #[test]
