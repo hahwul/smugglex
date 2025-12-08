@@ -1,5 +1,7 @@
 use crate::error::Result;
 use crate::http::send_request;
+use chrono::Local;
+use colored::*;
 use std::fs;
 
 /// Fetch cookies from the target server
@@ -62,6 +64,29 @@ pub fn export_payload(
     fs::write(&filename, payload)?;
 
     Ok(filename)
+}
+
+/// Log levels for consistent output formatting
+pub enum LogLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+impl LogLevel {
+    fn prefix(&self) -> ColoredString {
+        match self {
+            LogLevel::Info => "INF".cyan(),
+            LogLevel::Warning => "WRN".yellow(),
+            LogLevel::Error => "ERR".red(),
+        }
+    }
+}
+
+/// Print a log message with timestamp and level prefix
+pub fn log(level: LogLevel, message: &str) {
+    let time = Local::now().format("%I:%M%p").to_string().to_uppercase();
+    println!("{} {} {}", time.dimmed(), level.prefix(), message);
 }
 
 #[cfg(test)]
