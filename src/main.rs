@@ -27,9 +27,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Determine URLs to scan
-    let urls: Vec<String> = if let Some(ref url) = cli.url {
-        // URL provided via command line
-        vec![url.clone()]
+    let urls: Vec<String> = if !cli.urls.is_empty() {
+        // URLs provided via command line
+        cli.urls.clone()
     } else if !io::stdin().is_terminal() {
         // Read URLs from stdin (pipeline)
         let stdin = io::stdin();
