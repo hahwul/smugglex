@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
             .collect()
     } else {
         // No URL and no stdin - print help and exit
-        Cli::parse_from(&["smugglex", "--help"]);
+        Cli::parse_from(["smugglex", "--help"]);
         return Ok(());
     };
 
@@ -240,22 +240,22 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                 }
 
                 // Show HTTP raw request if payload was exported
-                if let Some(export_dir) = cli.export_dir.as_deref() {
-                    if let Some(idx) = result.payload_index {
-                        // Reconstruct the filename
-                        let sanitized_host = host.replace([':', '/', '.'], "_");
-                        let protocol = if use_tls { "https" } else { "http" };
-                        let filename = format!(
-                            "{}/{}_{}_{}_{}.txt",
-                            export_dir, protocol, sanitized_host, result.check_type, idx
-                        );
+                if let Some(export_dir) = cli.export_dir.as_deref()
+                    && let Some(idx) = result.payload_index
+                {
+                    // Reconstruct the filename
+                    let sanitized_host = host.replace([':', '/', '.'], "_");
+                    let protocol = if use_tls { "https" } else { "http" };
+                    let filename = format!(
+                        "{}/{}_{}_{}_{}.txt",
+                        export_dir, protocol, sanitized_host, result.check_type, idx
+                    );
 
-                        if let Ok(payload_content) = fs::read_to_string(&filename) {
-                            println!("\n{}", "HTTP Raw Request:".bold());
-                            println!("{}", "─".repeat(60).dimmed());
-                            println!("{}", payload_content.dimmed());
-                            println!("{}", "─".repeat(60).dimmed());
-                        }
+                    if let Ok(payload_content) = fs::read_to_string(&filename) {
+                        println!("\n{}", "HTTP Raw Request:".bold());
+                        println!("{}", "─".repeat(60).dimmed());
+                        println!("{}", payload_content.dimmed());
+                        println!("{}", "─".repeat(60).dimmed());
                     }
                 }
 
