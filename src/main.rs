@@ -137,9 +137,10 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
     }
 
     let mut results = Vec::new();
+    let mut found_vulnerability = false;
 
     // Run CL.TE check if enabled
-    if checks_to_run.contains(&"cl-te") {
+    if checks_to_run.contains(&"cl-te") && !(cli.exit_first && found_vulnerability) {
         let cl_te_payloads = get_cl_te_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
@@ -152,14 +153,18 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
+            exit_first: cli.exit_first,
         })
         .await?;
+        if result.vulnerable {
+            found_vulnerability = true;
+        }
         results.push(result);
         pb.inc(1);
     }
 
     // Run TE.CL check if enabled
-    if checks_to_run.contains(&"te-cl") {
+    if checks_to_run.contains(&"te-cl") && !(cli.exit_first && found_vulnerability) {
         let te_cl_payloads = get_te_cl_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
@@ -172,14 +177,18 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
+            exit_first: cli.exit_first,
         })
         .await?;
+        if result.vulnerable {
+            found_vulnerability = true;
+        }
         results.push(result);
         pb.inc(1);
     }
 
     // Run TE.TE check if enabled
-    if checks_to_run.contains(&"te-te") {
+    if checks_to_run.contains(&"te-te") && !(cli.exit_first && found_vulnerability) {
         let te_te_payloads = get_te_te_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
@@ -192,8 +201,12 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
+            exit_first: cli.exit_first,
         })
         .await?;
+        if result.vulnerable {
+            found_vulnerability = true;
+        }
         results.push(result);
         pb.inc(1);
     }

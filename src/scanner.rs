@@ -24,6 +24,7 @@ pub struct CheckParams<'a> {
     pub verbose: bool,
     pub use_tls: bool,
     pub export_dir: Option<&'a str>,
+    pub exit_first: bool,
 }
 
 /// Runs a set of attack requests for a given check type.

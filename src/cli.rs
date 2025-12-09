@@ -42,6 +42,10 @@ pub struct Cli {
     /// Export payloads to directory when vulnerabilities are found
     #[arg(long = "export-payloads")]
     pub export_dir: Option<String>,
+
+    /// Exit quickly after finding the first vulnerability
+    #[arg(short = '1', long = "exit-first", action = clap::ArgAction::SetTrue)]
+    pub exit_first: bool,
 }
 
 #[cfg(test)]
@@ -250,6 +254,25 @@ mod tests {
         assert_eq!(cli.export_dir, None, "export_dir should be None by default");
     }
 
+    // Test exit-first option
+    #[test]
+    fn test_exit_first_short_flag() {
+        let cli = Cli::parse_from(&["smugglex", "http://example.com", "-1"]);
+        assert!(cli.exit_first, "exit_first should be true with -1 flag");
+    }
+
+    #[test]
+    fn test_exit_first_long_flag() {
+        let cli = Cli::parse_from(&["smugglex", "http://example.com", "--exit-first"]);
+        assert!(cli.exit_first, "exit_first should be true with --exit-first flag");
+    }
+
+    #[test]
+    fn test_default_exit_first_false() {
+        let cli = Cli::parse_from(&["smugglex", "http://example.com"]);
+        assert!(!cli.exit_first, "exit_first should be false by default");
+    }
+
     // Test combinations
     #[test]
     fn test_all_options_combined() {
@@ -272,6 +295,7 @@ mod tests {
             "--cookies",
             "--export-payloads",
             "./exports",
+            "-1",
         ]);
 
         assert_eq!(cli.urls.len(), 1);
@@ -284,6 +308,7 @@ mod tests {
         assert_eq!(cli.vhost, Some("test.local".to_string()));
         assert!(cli.use_cookies);
         assert_eq!(cli.export_dir, Some("./exports".to_string()));
+        assert!(cli.exit_first);
     }
 
     // Test HTTPS URLs
