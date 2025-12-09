@@ -2,6 +2,26 @@
 
 A powerful HTTP Request Smuggling testing tool written in Rust.
 
+```
+smugglex https://********************.web-security-academy.net/
+11:27PM INF start scan to https://********************.web-security-academy.net/
+11:29PM WRN smuggling found 2 vulnerability(ies)
+
+=== TE.CL Vulnerability Details ===
+Status: VULNERABLE
+Payload Index: 0
+Attack Response: Connection Timeout
+Timing: Normal: 1279ms, Attack: 10000ms
+
+=== TE.TE Vulnerability Details ===
+Status: VULNERABLE
+Payload Index: 11
+Attack Response: Connection Timeout
+Timing: Normal: 1263ms, Attack: 10000ms
+
+11:29PM INF scan completed in 141.099 seconds
+```
+
 ## Recent Improvements
 
 - **Extended Mutation Patterns**: Expanded from 6 to 30+ Transfer-Encoding header variations inspired by [smuggler](https://github.com/defparam/smuggler), including whitespace injection, control characters, case variations, and obfuscation techniques
