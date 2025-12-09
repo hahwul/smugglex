@@ -593,6 +593,7 @@ mod tests {
             normal_duration_ms: 150,
             attack_duration_ms: None,
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         let json = serde_json::to_string(&result);

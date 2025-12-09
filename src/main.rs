@@ -20,7 +20,7 @@ use crate::error::Result;
 use crate::model::ScanResults;
 use crate::payloads::{get_cl_te_payloads, get_te_cl_payloads, get_te_te_payloads};
 use crate::scanner::{CheckParams, run_checks_for_type};
-use crate::utils::{LogLevel, fetch_cookies, log, sanitize_hostname};
+use crate::utils::{LogLevel, fetch_cookies, log};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -243,24 +243,13 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                     );
                 }
 
-                // Show HTTP raw request if payload was exported
-                if let Some(export_dir) = cli.export_dir.as_deref()
-                    && let Some(idx) = result.payload_index
-                {
-                    // Reconstruct the filename
-                    let sanitized_host = sanitize_hostname(host);
-                    let protocol = if use_tls { "https" } else { "http" };
-                    let filename = format!(
-                        "{}/{}_{}_{}_{}.txt",
-                        export_dir, protocol, sanitized_host, result.check_type, idx
-                    );
-
-                    if let Ok(payload_content) = fs::read_to_string(&filename) {
-                        println!("\n{}", "HTTP Raw Request:".bold());
-                        println!("{}", "─".repeat(60).dimmed());
-                        println!("{}", payload_content.dimmed());
-                        println!("{}", "─".repeat(60).dimmed());
-                    }
+                // Show HTTP raw request payload
+                if let Some(ref payload) = result.payload {
+                    println!("\n{}", "HTTP Raw Request:".bold());
+                    println!("{}", "─".repeat(60).dimmed());
+                    // Display payload with color highlighting
+                    println!("{}", payload.cyan());
+                    println!("{}", "─".repeat(60).dimmed());
                 }
 
                 println!();

@@ -11,6 +11,8 @@ pub struct CheckResult {
     pub normal_duration_ms: u64,
     pub attack_duration_ms: Option<u64>,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
 }
 
 /// Overall scan results
@@ -53,6 +55,7 @@ mod tests {
             normal_duration_ms: 150,
             attack_duration_ms,
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         }
     }
 
@@ -158,6 +161,7 @@ mod tests {
             normal_duration_ms: 0,
             attack_duration_ms: Some(0),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         assert_eq!(result.normal_duration_ms, 0);
@@ -176,6 +180,7 @@ mod tests {
             normal_duration_ms: 100,
             attack_duration_ms: Some(5000),
             timestamp: "2024-01-01T12:00:00+00:00".to_string(),
+            payload: None,
         };
 
         let json = serde_json::to_string(&result).expect("Should serialize");
@@ -196,6 +201,7 @@ mod tests {
             normal_duration_ms: 100,
             attack_duration_ms: Some(10000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -240,6 +246,7 @@ mod tests {
             normal_duration_ms: 200,
             attack_duration_ms: Some(3000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         let cloned = result.clone();
@@ -260,6 +267,7 @@ mod tests {
             normal_duration_ms: 200,
             attack_duration_ms: Some(5000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         let check2 = CheckResult {
@@ -271,6 +279,7 @@ mod tests {
             normal_duration_ms: 150,
             attack_duration_ms: None,
             timestamp: "2024-01-01T12:00:01Z".to_string(),
+            payload: None,
         };
 
         let scan_results = ScanResults {
@@ -298,6 +307,7 @@ mod tests {
             normal_duration_ms: 200,
             attack_duration_ms: Some(4000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         let scan_results = ScanResults {
@@ -373,6 +383,7 @@ mod tests {
                 normal_duration_ms: 150,
                 attack_duration_ms: Some(3000),
                 timestamp: "2024-01-01T12:00:00Z".to_string(),
+                payload: None,
             },
             CheckResult {
                 check_type: "TE.CL".to_string(),
@@ -383,6 +394,7 @@ mod tests {
                 normal_duration_ms: 160,
                 attack_duration_ms: None,
                 timestamp: "2024-01-01T12:00:01Z".to_string(),
+                payload: None,
             },
             CheckResult {
                 check_type: "TE.TE".to_string(),
@@ -393,6 +405,7 @@ mod tests {
                 normal_duration_ms: 140,
                 attack_duration_ms: Some(10000),
                 timestamp: "2024-01-01T12:00:02Z".to_string(),
+                payload: None,
             },
         ];
 
@@ -423,6 +436,7 @@ mod tests {
                 normal_duration_ms: 100,
                 attack_duration_ms: None,
                 timestamp: "2024-01-01T12:00:00Z".to_string(),
+                payload: None,
             };
 
             assert_eq!(result.check_type, check_type);
@@ -441,6 +455,7 @@ mod tests {
             normal_duration_ms: 100,
             attack_duration_ms: Some(15000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         assert!(result1.attack_status.as_ref().unwrap().contains("504"));
@@ -455,11 +470,95 @@ mod tests {
             normal_duration_ms: 100,
             attack_duration_ms: Some(10000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
         };
 
         assert_eq!(
             result2.attack_status,
             Some("Connection Timeout".to_string())
         );
+    }
+
+    #[test]
+    fn test_payload_stored_in_vulnerable_result() {
+        // Test that payload is properly stored when vulnerability is detected
+        let payload_content = "POST / HTTP/1.1\r\nHost: test.com\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n";
+        let result = CheckResult {
+            check_type: "CL.TE".to_string(),
+            vulnerable: true,
+            payload_index: Some(0),
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: Some("Connection Timeout".to_string()),
+            normal_duration_ms: 100,
+            attack_duration_ms: Some(5000),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: Some(payload_content.to_string()),
+        };
+        
+        assert!(result.vulnerable);
+        assert!(result.payload.is_some());
+        assert_eq!(result.payload.as_ref().unwrap(), payload_content);
+    }
+
+    #[test]
+    fn test_payload_is_none_for_non_vulnerable() {
+        // Test that non-vulnerable results don't store payloads
+        let result = CheckResult {
+            check_type: "TE.CL".to_string(),
+            vulnerable: false,
+            payload_index: None,
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: None,
+            normal_duration_ms: 100,
+            attack_duration_ms: None,
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
+        };
+        
+        assert!(!result.vulnerable);
+        assert!(result.payload.is_none());
+    }
+
+    #[test]
+    fn test_payload_serialization_with_payload() {
+        // Test that payload field is properly serialized
+        let result = CheckResult {
+            check_type: "TE.TE".to_string(),
+            vulnerable: true,
+            payload_index: Some(1),
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: Some("Connection Timeout".to_string()),
+            normal_duration_ms: 100,
+            attack_duration_ms: Some(10000),
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: Some("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n".to_string()),
+        };
+
+        let json = serde_json::to_string(&result).expect("Failed to serialize");
+        
+        // Verify JSON contains payload field
+        assert!(json.contains("\"payload\":"));
+        assert!(json.contains("GET / HTTP/1.1"));
+    }
+
+    #[test]
+    fn test_payload_serialization_without_payload() {
+        // Test that payload field is skipped when None
+        let result = CheckResult {
+            check_type: "CL.TE".to_string(),
+            vulnerable: false,
+            payload_index: None,
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: None,
+            normal_duration_ms: 100,
+            attack_duration_ms: None,
+            timestamp: "2024-01-01T12:00:00Z".to_string(),
+            payload: None,
+        };
+
+        let json = serde_json::to_string(&result).expect("Failed to serialize");
+        
+        // Verify JSON does NOT contain payload field when it's None
+        assert!(!json.contains("\"payload\":"));
     }
 }

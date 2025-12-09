@@ -55,6 +55,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
     let mut result_payload_index = None;
     let mut result_attack_status = None;
     let mut last_attack_duration = None;
+    let mut result_payload = None;
 
     // Threshold for detecting timing-based smuggling
     let timing_threshold = normal_duration.as_millis() * TIMING_MULTIPLIER;
@@ -107,6 +108,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                     vulnerable = true;
                     result_payload_index = Some(i);
                     result_attack_status = Some(attack_status_line.to_string());
+                    result_payload = Some(attack_request.clone());
 
                     // Export payload if export_dir is specified
                     if let Some(export_dir) = params.export_dir {
@@ -148,6 +150,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                     result_payload_index = Some(i);
                     result_attack_status = Some("Connection Timeout".to_string());
                     last_attack_duration = Some(Duration::from_secs(params.timeout));
+                    result_payload = Some(attack_request.clone());
 
                     // Export payload if export_dir is specified
                     if let Some(export_dir) = params.export_dir {
@@ -196,6 +199,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
         normal_duration_ms: normal_duration.as_millis() as u64,
         attack_duration_ms: last_attack_duration.map(|d| d.as_millis() as u64),
         timestamp: Utc::now().to_rfc3339(),
+        payload: result_payload,
     })
 }
 
@@ -457,6 +461,7 @@ mod tests {
             normal_duration_ms: 150,
             attack_duration_ms: Some(5000),
             timestamp: Utc::now().to_rfc3339(),
+            payload: None,
         };
 
         assert!(result.vulnerable);
@@ -476,6 +481,7 @@ mod tests {
             normal_duration_ms: 150,
             attack_duration_ms: None,
             timestamp: Utc::now().to_rfc3339(),
+            payload: None,
         };
 
         assert!(!result.vulnerable);
