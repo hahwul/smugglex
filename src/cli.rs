@@ -27,7 +27,7 @@ pub struct Cli {
     #[arg(short = 'H', long = "header")]
     pub headers: Vec<String>,
 
-    /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te)
+    /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te,h2c)
     #[arg(short = 'c', long = "checks")]
     pub checks: Option<String>,
 
