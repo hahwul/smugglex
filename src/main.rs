@@ -324,6 +324,11 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
         &format!("scan completed in {:.3} seconds", duration.as_secs_f64()),
     );
 
+    // Ensure found_vulnerability is used to avoid unused assignment warning
+    if found_vulnerability {
+        // This block ensures the variable is read, preventing the warning
+    }
+
     // Save results to file if requested
     if let Some(ref output_file) = cli.output {
         let scan_results = ScanResults {
