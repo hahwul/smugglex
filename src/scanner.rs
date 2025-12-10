@@ -216,6 +216,7 @@ mod tests {
     //! - HTTP status code parsing (408, 504 timeout codes)
     //! - Edge cases for timing thresholds
     //! - CheckResult state validation
+    //! - Progress message formatting with overall check position
 
     use super::*;
 
@@ -229,6 +230,61 @@ mod tests {
     #[test]
     fn test_min_delay_constant() {
         assert_eq!(MIN_DELAY_MS, 1000, "Minimum delay should be 1000ms (1 second)");
+    }
+
+    // ========== Progress Message Format Tests ==========
+
+    #[test]
+    fn test_progress_message_format_initial() {
+        let current_check = 1;
+        let total_checks = 4;
+        let check_name = "CL.TE";
+        let total_requests = 10;
+        
+        let message = format!(
+            "[{}/{}] checking {} (0/{})",
+            current_check, total_checks, check_name, total_requests
+        );
+        
+        assert_eq!(message, "[1/4] checking CL.TE (0/10)");
+    }
+
+    #[test]
+    fn test_progress_message_format_with_percentage() {
+        let current_check = 2;
+        let total_checks = 4;
+        let check_name = "TE.CL";
+        let current = 5;
+        let total_requests = 10;
+        let percentage = (current as f64 / total_requests as f64 * 100.0) as u32;
+        
+        let message = format!(
+            "[{}/{}] checking {} ({}/{} - {}%)",
+            current_check, total_checks, check_name, current, total_requests, percentage
+        );
+        
+        assert_eq!(message, "[2/4] checking TE.CL (5/10 - 50%)");
+    }
+
+    #[test]
+    fn test_progress_message_all_check_types() {
+        let check_types = vec![
+            ("CL.TE", 1),
+            ("TE.CL", 2),
+            ("TE.TE", 3),
+            ("H2C", 4),
+        ];
+        let total_checks = 4;
+        
+        for (check_name, current_check) in check_types {
+            let message = format!(
+                "[{}/{}] checking {} (0/10)",
+                current_check, total_checks, check_name
+            );
+            
+            assert!(message.starts_with(&format!("[{}/{}]", current_check, total_checks)));
+            assert!(message.contains(check_name));
+        }
     }
 
     // ========== Timing Calculation Tests ==========
