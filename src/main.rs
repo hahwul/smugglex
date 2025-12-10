@@ -1,11 +1,3 @@
-mod cli;
-mod error;
-mod http;
-mod model;
-mod payloads;
-mod scanner;
-mod utils;
-
 use chrono::Utc;
 use clap::Parser;
 use colored::*;
@@ -15,14 +7,14 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
 use url::Url;
 
-use crate::cli::Cli;
-use crate::error::Result;
-use crate::model::ScanResults;
-use crate::payloads::{
+use smugglex::cli::Cli;
+use smugglex::error::Result;
+use smugglex::model::ScanResults;
+use smugglex::payloads::{
     get_cl_te_payloads, get_h2_payloads, get_h2c_payloads, get_te_cl_payloads, get_te_te_payloads,
 };
-use crate::scanner::{CheckParams, run_checks_for_type};
-use crate::utils::{LogLevel, fetch_cookies, log};
+use smugglex::scanner::{CheckParams, run_checks_for_type};
+use smugglex::utils::{LogLevel, fetch_cookies, log};
 
 #[tokio::main]
 async fn main() -> Result<()> {
