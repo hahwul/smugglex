@@ -31,8 +31,6 @@ fn create_test_check_result(
     }
 }
 
-
-
 #[test]
 fn test_check_result_creation_vulnerable() {
     let result = create_test_check_result(

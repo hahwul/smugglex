@@ -24,8 +24,6 @@ fn create_test_dir(name: &str) -> String {
 fn cleanup_test_dir(dir: &str) {
     let _ = fs::remove_dir_all(dir);
 }
-
-
 #[test]
 fn test_export_payload_creates_file() {
     let temp_dir = create_test_dir("export");

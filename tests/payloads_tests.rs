@@ -11,8 +11,6 @@
 
 use smugglex::payloads::*;
 use smugglex::model::CheckResult;
-
-
 #[test]
 fn test_cl_te_payloads_generation() {
     let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[], &[]);
