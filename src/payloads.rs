@@ -997,6 +997,7 @@ pub fn get_h2_payloads(
 
 /// Helper function to check if a payload contains a Transfer-Encoding related header
 /// This handles various obfuscation techniques including control characters in header names
+/// Note: This is only used in tests to verify payload generation, not in production code
 #[cfg(test)]
 fn contains_te_header_pattern(payload: &str) -> bool {
     let payload_lower = payload.to_lowercase();
