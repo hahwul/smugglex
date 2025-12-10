@@ -139,8 +139,13 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
     let mut results = Vec::new();
     let mut found_vulnerability = false;
 
+    // Calculate total number of checks to run
+    let total_checks = checks_to_run.len();
+    let mut current_check = 0;
+
     // Run CL.TE check if enabled
     if checks_to_run.contains(&"cl-te") && !(cli.exit_first && found_vulnerability) {
+        current_check += 1;
         let cl_te_payloads = get_cl_te_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
@@ -153,6 +158,8 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
+            current_check,
+            total_checks,
         })
         .await?;
         found_vulnerability |= result.vulnerable;
@@ -162,6 +169,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
 
     // Run TE.CL check if enabled
     if checks_to_run.contains(&"te-cl") && !(cli.exit_first && found_vulnerability) {
+        current_check += 1;
         let te_cl_payloads = get_te_cl_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
@@ -174,6 +182,8 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
+            current_check,
+            total_checks,
         })
         .await?;
         found_vulnerability |= result.vulnerable;
@@ -183,6 +193,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
 
     // Run TE.TE check if enabled
     if checks_to_run.contains(&"te-te") && !(cli.exit_first && found_vulnerability) {
+        current_check += 1;
         let te_te_payloads = get_te_te_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
@@ -195,6 +206,8 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
+            current_check,
+            total_checks,
         })
         .await?;
         found_vulnerability |= result.vulnerable;
@@ -204,6 +217,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
 
     // Run H2C check if enabled
     if checks_to_run.contains(&"h2c") && !(cli.exit_first && found_vulnerability) {
+        current_check += 1;
         let h2c_payloads = get_h2c_payloads(path, host_header, method, &cli.headers, &cookies);
         let result = run_checks_for_type(CheckParams {
             pb: &pb,
@@ -216,6 +230,8 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
+            current_check,
+            total_checks,
         })
         .await?;
         found_vulnerability |= result.vulnerable;
