@@ -12,7 +12,6 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
 use tokio::net::TcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -142,6 +141,7 @@ async fn test_checks_filter_with_spaces() {
 }
 
 #[tokio::test]
+#[allow(clippy::unnecessary_unwrap)]
 async fn test_vhost_header_override() {
     let url_host = "192.168.1.1";
     let vhost = Some("example.com");
@@ -151,6 +151,7 @@ async fn test_vhost_header_override() {
 }
 
 #[tokio::test]
+#[allow(clippy::unnecessary_unwrap)]
 async fn test_vhost_header_default() {
     let url_host = "192.168.1.1";
     let vhost: Option<&str> = None;
@@ -368,13 +369,8 @@ async fn test_multiple_urls_processing_logic() {
 async fn test_empty_urls_handling() {
     let urls: Vec<String> = vec![];
     
-    if urls.is_empty() {
-        // Should exit early
-        assert!(true);
-    } else {
-        // Should not reach here
-        assert!(false);
-    }
+    // Should exit early when empty
+    assert!(urls.is_empty());
 }
 
 #[tokio::test]
@@ -498,15 +494,9 @@ async fn test_verbose_flag_behavior() {
     let verbose_true = true;
     let verbose_false = false;
     
-    // When verbose is true, progress bar should be cleared
-    if verbose_true {
-        assert!(true); // Simulate pb.finish_and_clear()
-    }
-    
-    // When verbose is false, progress bar should be active
-    if !verbose_false {
-        assert!(true); // Simulate pb.enable_steady_tick()
-    }
+    // Test verbose flag values
+    assert!(verbose_true);
+    assert!(!verbose_false);
 }
 
 #[tokio::test]
@@ -524,7 +514,6 @@ async fn test_all_check_types_selection() {
 
 #[tokio::test]
 async fn test_check_type_filtering() {
-    let all_checks = vec!["cl-te", "te-cl", "te-te", "h2c", "h2"];
     let selected_checks = vec!["cl-te", "h2c"];
     
     let should_run_cl_te = selected_checks.contains(&"cl-te");
@@ -624,31 +613,30 @@ async fn test_results_aggregation() {
     use smugglex::model::CheckResult;
     use chrono::Utc;
     
-    let mut results: Vec<CheckResult> = Vec::new();
-    
-    results.push(CheckResult {
-        check_type: "CL.TE".to_string(),
-        vulnerable: false,
-        payload_index: None,
-        normal_status: "HTTP/1.1 200 OK".to_string(),
-        attack_status: None,
-        normal_duration_ms: 100,
-        attack_duration_ms: None,
-        timestamp: Utc::now().to_rfc3339(),
-        payload: None,
-    });
-    
-    results.push(CheckResult {
-        check_type: "TE.CL".to_string(),
-        vulnerable: true,
-        payload_index: Some(0),
-        normal_status: "HTTP/1.1 200 OK".to_string(),
-        attack_status: Some("HTTP/1.1 504 Gateway Timeout".to_string()),
-        normal_duration_ms: 100,
-        attack_duration_ms: Some(3000),
-        timestamp: Utc::now().to_rfc3339(),
-        payload: None,
-    });
+    let results = vec![
+        CheckResult {
+            check_type: "CL.TE".to_string(),
+            vulnerable: false,
+            payload_index: None,
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: None,
+            normal_duration_ms: 100,
+            attack_duration_ms: None,
+            timestamp: Utc::now().to_rfc3339(),
+            payload: None,
+        },
+        CheckResult {
+            check_type: "TE.CL".to_string(),
+            vulnerable: true,
+            payload_index: Some(0),
+            normal_status: "HTTP/1.1 200 OK".to_string(),
+            attack_status: Some("HTTP/1.1 504 Gateway Timeout".to_string()),
+            normal_duration_ms: 100,
+            attack_duration_ms: Some(3000),
+            timestamp: Utc::now().to_rfc3339(),
+            payload: None,
+        },
+    ];
     
     let vulnerable_count = results.iter().filter(|r| r.vulnerable).count();
     assert_eq!(vulnerable_count, 1);

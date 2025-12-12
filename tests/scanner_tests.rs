@@ -358,7 +358,7 @@ fn test_edge_case_exact_threshold() {
 
     // At exact threshold, should NOT be detected (needs to exceed, not equal)
     assert_eq!(attack_duration_ms, threshold);
-    assert!(!(attack_duration_ms > threshold));
+    assert!(attack_duration_ms <= threshold);
 }
 
 #[test]
@@ -860,6 +860,5 @@ async fn test_progress_bar_integration() {
     pb.inc(1);
     pb.finish_and_clear();
     
-    // Just verify progress bar can be created and used
-    assert!(true);
+    // Progress bar created and used successfully
 }
