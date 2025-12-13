@@ -8,11 +8,15 @@
 //! - Edge cases for timing thresholds
 //! - CheckResult state validation
 //! - Progress message formatting showing current check number vs total checks (e.g., [1/4])
+//! - Integration tests for run_checks_for_type function
 
-use smugglex::scanner::{TIMING_MULTIPLIER, MIN_DELAY_MS};
+use smugglex::scanner::{run_checks_for_type, CheckParams, TIMING_MULTIPLIER, MIN_DELAY_MS};
 use smugglex::model::CheckResult;
 use std::time::Duration;
 use chrono::Utc;
+use indicatif::ProgressBar;
+use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // ========== Constants Tests ==========
 
@@ -354,7 +358,7 @@ fn test_edge_case_exact_threshold() {
 
     // At exact threshold, should NOT be detected (needs to exceed, not equal)
     assert_eq!(attack_duration_ms, threshold);
-    assert!(!(attack_duration_ms > threshold));
+    assert!(attack_duration_ms <= threshold);
 }
 
 #[test]
@@ -366,4 +370,495 @@ fn test_edge_case_just_above_threshold() {
     // Should be detected (exceeds threshold AND min delay)
     assert!(attack_duration_ms > threshold);
     assert!(attack_duration_ms > MIN_DELAY_MS);
+}
+
+// ========== Integration Tests for run_checks_for_type ==========
+
+/// Helper function to start a mock HTTP server that responds normally
+async fn start_normal_server() -> (String, u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    (host, port, handle)
+}
+
+/// Helper function to start a mock HTTP server that responds with timeout status
+async fn start_timeout_server() -> (String, u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let mut request_count = 0;
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                request_count += 1;
+                let count = request_count;
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    
+                    // First request (normal) returns 200 OK
+                    // Second request (attack) returns 504 Gateway Timeout
+                    let response = if count == 1 {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!"
+                    } else {
+                        "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n"
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    (host, port, handle)
+}
+
+/// Helper function to start a mock HTTP server that responds slowly
+async fn start_slow_server() -> (String, u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let mut request_count = 0;
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                request_count += 1;
+                let count = request_count;
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    
+                    // First request (normal) returns immediately
+                    // Second request (attack) delays for 2 seconds to trigger timing detection
+                    if count > 1 {
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                    }
+                    
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    (host, port, handle)
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_not_vulnerable() {
+    let (host, port, handle) = start_normal_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let attack_requests = vec![
+        format!("GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "TEST",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(!check_result.vulnerable);
+    assert_eq!(check_result.check_type, "TEST");
+    assert_eq!(check_result.payload_index, None);
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_vulnerable_timeout_status() {
+    let (host, port, handle) = start_timeout_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let attack_requests = vec![
+        format!("GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(check_result.vulnerable);
+    assert_eq!(check_result.check_type, "CL.TE");
+    assert_eq!(check_result.payload_index, Some(0));
+    assert!(check_result.attack_status.is_some());
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_vulnerable_timing() {
+    let (host, port, handle) = start_slow_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let attack_requests = vec![
+        format!("GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "TE.CL",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(check_result.vulnerable);
+    assert_eq!(check_result.check_type, "TE.CL");
+    assert_eq!(check_result.payload_index, Some(0));
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_multiple_payloads() {
+    let (host, port, handle) = start_timeout_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    // Multiple attack requests - first one should trigger vulnerability (it's the 2nd request overall)
+    let attack_requests = vec![
+        format!("GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1", host),
+        format!("GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest2", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "H2C",
+        host: &host,
+        port,
+        path: "/test",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 2,
+        total_checks: 5,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(check_result.vulnerable);
+    // The first attack request will actually be the 2nd overall request (after the normal baseline request)
+    assert_eq!(check_result.payload_index, Some(0));
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_with_export_dir() {
+    let (host, port, handle) = start_timeout_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let temp_dir = std::env::temp_dir().join("smugglex_test_export");
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    
+    let attack_requests = vec![
+        format!("GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "TE.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: Some(temp_dir.to_str().unwrap()),
+        current_check: 1,
+        total_checks: 1,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(check_result.vulnerable);
+    
+    // Clean up
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_verbose_mode() {
+    let (host, port, handle) = start_normal_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let attack_requests = vec![
+        format!("GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "H2",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: true, // Test verbose mode
+        use_tls: false,
+        export_dir: None,
+        current_check: 5,
+        total_checks: 5,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(!check_result.vulnerable);
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_with_custom_path() {
+    let (host, port, handle) = start_normal_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let attack_requests = vec![
+        format!("GET /api/v1/test HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/api/v1/test",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_empty_payloads() {
+    let (host, port, handle) = start_normal_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let attack_requests: Vec<String> = vec![]; // Empty payload list
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "TEST",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(!check_result.vulnerable);
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_different_check_names() {
+    let (host, port, handle) = start_normal_server().await;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let check_names = vec!["CL.TE", "TE.CL", "TE.TE", "H2C", "H2"];
+    
+    for check_name in check_names {
+        let attack_requests = vec![
+            format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", host),
+        ];
+        
+        let result = run_checks_for_type(CheckParams {
+            pb: &pb,
+            check_name,
+            host: &host,
+            port,
+            path: "/",
+            attack_requests,
+            timeout: 5,
+            verbose: false,
+            use_tls: false,
+            export_dir: None,
+            current_check: 1,
+            total_checks: 1,
+        })
+        .await;
+        
+        assert!(result.is_ok());
+        let check_result = result.unwrap();
+        assert_eq!(check_result.check_type, check_name);
+    }
+    
+    handle.abort();
+}
+
+#[tokio::test]
+async fn test_run_checks_for_type_408_status_code() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let mut request_count = 0;
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                request_count += 1;
+                let count = request_count;
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    
+                    // First request returns 200, second returns 408
+                    let response = if count == 1 {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!"
+                    } else {
+                        "HTTP/1.1 408 Request Timeout\r\nContent-Length: 0\r\n\r\n"
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+    
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+    
+    let attack_requests = vec![
+        format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", host),
+    ];
+    
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+    })
+    .await;
+    
+    handle.abort();
+    
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(check_result.vulnerable);
+}
+
+#[tokio::test]
+async fn test_progress_bar_integration() {
+    use indicatif::ProgressStyle;
+    
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .unwrap()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+    );
+    
+    pb.set_message("Testing progress");
+    pb.inc(1);
+    pb.finish_and_clear();
+    
+    // Progress bar created and used successfully
 }
