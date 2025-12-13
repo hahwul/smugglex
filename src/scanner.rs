@@ -5,7 +5,6 @@ use crate::utils::export_payload;
 use chrono::Utc;
 use colored::*;
 use indicatif::ProgressBar;
-
 use std::time::Duration;
 
 // Detection thresholds
@@ -26,6 +25,59 @@ pub struct CheckParams<'a> {
     pub export_dir: Option<&'a str>,
     pub current_check: usize,
     pub total_checks: usize,
+}
+
+struct VulnerabilityInfo {
+    status: String,
+    duration: Duration,
+}
+
+async fn check_single_payload(
+    host: &str,
+    port: u16,
+    attack_request: &str,
+    timeout: u64,
+    verbose: bool,
+    use_tls: bool,
+    timing_threshold: u128,
+) -> Result<Option<VulnerabilityInfo>> {
+    match send_request(host, port, attack_request, timeout, verbose, use_tls).await {
+        Ok((attack_response, attack_duration)) => {
+            let attack_status_line = attack_response.lines().next().unwrap_or("").to_string();
+            let attack_millis = attack_duration.as_millis();
+
+            let status_code = {
+                let parts: Vec<&str> = attack_status_line.split_whitespace().collect();
+                if parts.len() >= 2 && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2")) {
+                    parts[1].parse::<u16>().ok()
+                } else {
+                    None
+                }
+            };
+
+            let is_timeout_error = matches!(status_code, Some(408) | Some(504));
+            let is_delayed = attack_millis > timing_threshold && attack_millis > MIN_DELAY_MS;
+
+            if is_timeout_error || is_delayed {
+                Ok(Some(VulnerabilityInfo {
+                    status: attack_status_line,
+                    duration: attack_duration,
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(e) => {
+            if matches!(e, SmugglexError::Timeout(_)) {
+                Ok(Some(VulnerabilityInfo {
+                    status: "Connection Timeout".to_string(),
+                    duration: Duration::from_secs(timeout),
+                }))
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 /// Runs a set of attack requests for a given check type.
@@ -53,145 +105,65 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
     .await?;
     let normal_status = normal_response.lines().next().unwrap_or("").to_string();
 
-    let mut vulnerable = false;
-    let mut result_payload_index = None;
-    let mut result_attack_status = None;
-    let mut last_attack_duration = None;
-    let mut result_payload = None;
-
-    // Threshold for detecting timing-based smuggling
+    let mut vulnerability_info = None;
     let timing_threshold = normal_duration.as_millis() * TIMING_MULTIPLIER;
 
     for (i, attack_request) in params.attack_requests.iter().enumerate() {
-        // Update progress message with current/total and percentage
         if !params.verbose {
             let current = i + 1;
             let percentage = (current as f64 / total_requests as f64 * 100.0) as u32;
             params.pb.set_message(format!(
                 "[{}/{}] checking {} ({}/{} - {}%)",
-                params.current_check,
-                params.total_checks,
-                params.check_name,
-                current,
-                total_requests,
-                percentage
+                params.current_check, params.total_checks, params.check_name, current, total_requests, percentage
             ));
         }
-        match send_request(
+
+        match check_single_payload(
             params.host,
             params.port,
             attack_request,
             params.timeout,
             params.verbose,
             params.use_tls,
+            timing_threshold,
         )
         .await
         {
-            Ok((attack_response, attack_duration)) => {
-                last_attack_duration = Some(attack_duration);
-                let attack_status_line = attack_response.lines().next().unwrap_or("");
-                let attack_millis = attack_duration.as_millis();
-
-                // Extract HTTP status code from status line (e.g., "HTTP/1.1 504 Gateway Timeout")
-                // Validate proper HTTP response format before parsing
-                let status_code = {
-                    let parts: Vec<&str> = attack_status_line.split_whitespace().collect();
-                    if parts.len() >= 2
-                        && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2"))
-                    {
-                        parts[1].parse::<u16>().ok()
-                    } else {
-                        None
-                    }
-                };
-
-                // Check for smuggling indicators:
-                // 1. Timeout status codes (408 Request Timeout, 504 Gateway Timeout)
-                // 2. Significantly delayed response (3x+ slower than baseline AND exceeds minimum threshold)
-                let is_timeout_error = matches!(status_code, Some(408) | Some(504));
-                let is_delayed = attack_millis > timing_threshold && attack_millis > MIN_DELAY_MS;
-
-                if is_timeout_error || is_delayed {
-                    vulnerable = true;
-                    result_payload_index = Some(i);
-                    result_attack_status = Some(attack_status_line.to_string());
-                    result_payload = Some(attack_request.clone());
-
-                    // Export payload if export_dir is specified
-                    if let Some(export_dir) = params.export_dir {
-                        match export_payload(
-                            export_dir,
-                            params.host,
-                            params.check_name,
-                            i,
-                            attack_request,
-                            params.use_tls,
-                        ) {
-                            Ok(_) => {
-                                // Silently exported, will be shown in final results
-                            }
-                            Err(e) => {
-                                if params.verbose {
-                                    println!(
-                                        "  {} Failed to export payload: {}",
-                                        "[!] ".yellow(),
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
+            Ok(Some(info)) => {
+                vulnerability_info = Some((i, attack_request.clone(), info));
+                break;
             }
+            Ok(None) => { /* Not vulnerable with this payload, continue */ }
             Err(e) => {
-                // Check if error is a timeout error
-                let is_timeout = matches!(e, SmugglexError::Timeout(_)) || {
-                    // Check for timeout in error message
-                    let error_str = e.to_string().to_lowercase();
-                    error_str.contains("timed out") || error_str.contains("timeout")
-                };
-
-                if is_timeout {
-                    vulnerable = true;
-                    result_payload_index = Some(i);
-                    result_attack_status = Some("Connection Timeout".to_string());
-                    last_attack_duration = Some(Duration::from_secs(params.timeout));
-                    result_payload = Some(attack_request.clone());
-
-                    // Export payload if export_dir is specified
-                    if let Some(export_dir) = params.export_dir {
-                        match export_payload(
-                            export_dir,
-                            params.host,
-                            params.check_name,
-                            i,
-                            attack_request,
-                            params.use_tls,
-                        ) {
-                            Ok(_) => {
-                                // Silently exported, will be shown in final results
-                            }
-                            Err(e) => {
-                                if params.verbose {
-                                    println!(
-                                        "  {} Failed to export payload: {}",
-                                        "[!] ".yellow(),
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    break;
-                } else if params.verbose {
+                if params.verbose {
                     println!(
                         "\n{} Error during {} attack request (payload {}): {}",
-                        "[!] ".yellow(),
+                        "[!]".yellow(),
                         params.check_name,
                         i,
                         e
                     );
+                }
+            }
+        }
+    }
+
+    let (vulnerable, result_payload_index, result_payload, result_attack_status, last_attack_duration) =
+        if let Some((i, payload, info)) = vulnerability_info {
+            (true, Some(i), Some(payload), Some(info.status), Some(info.duration))
+        } else {
+            (false, None, None, None, None)
+        };
+
+    if vulnerable {
+        if let (Some(export_dir), Some(payload_index), Some(payload)) =
+            (params.export_dir, result_payload_index, &result_payload)
+        {
+            if let Err(e) =
+                export_payload(export_dir, params.host, params.check_name, payload_index, payload, params.use_tls)
+            {
+                if params.verbose {
+                    println!("  {} Failed to export payload: {}", "[!]".yellow(), e);
                 }
             }
         }

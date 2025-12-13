@@ -3,7 +3,7 @@ use once_cell::sync::Lazy;
 use rustls::pki_types::ServerName;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
@@ -21,6 +21,29 @@ static TLS_CONFIG: Lazy<Arc<rustls::ClientConfig>> = Lazy::new(|| {
     )
 });
 
+/// A trait that combines AsyncRead and AsyncWrite.
+trait ReadWrite: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite> ReadWrite for T {}
+
+/// Creates a TCP or TLS stream.
+async fn get_stream(
+    host: &str,
+    port: u16,
+    use_tls: bool,
+) -> Result<Box<dyn ReadWrite + Unpin + Send>> {
+    let addr = format!("{}:{}", host, port);
+    if use_tls {
+        let connector = TlsConnector::from(Arc::clone(&TLS_CONFIG));
+        let stream = TcpStream::connect(&addr).await?;
+        let domain = ServerName::try_from(host.to_string())?;
+        let tls_stream = connector.connect(domain, stream).await?;
+        Ok(Box::new(tls_stream))
+    } else {
+        let stream = TcpStream::connect(&addr).await?;
+        Ok(Box::new(stream))
+    }
+}
+
 /// Sends a raw HTTP request and returns the response and duration.
 pub async fn send_request(
     host: &str,
@@ -35,32 +58,14 @@ pub async fn send_request(
         println!("{}", request.cyan());
     }
 
-    let addr = format!("{}:{}", host, port);
     let start = Instant::now();
 
-    let response_str = if use_tls {
-        let connector = TlsConnector::from(Arc::clone(&TLS_CONFIG));
-        let stream = TcpStream::connect(&addr).await?;
-        let domain = ServerName::try_from(host.to_string())?;
-        let mut tls_stream = connector.connect(domain, stream).await?;
+    let mut stream = get_stream(host, port, use_tls).await?;
+    stream.write_all(request.as_bytes()).await?;
 
-        tls_stream.write_all(request.as_bytes()).await?;
-
-        let mut buf = Vec::new();
-        tokio::time::timeout(
-            Duration::from_secs(timeout),
-            tls_stream.read_to_end(&mut buf),
-        )
-        .await??;
-        String::from_utf8_lossy(&buf).to_string()
-    } else {
-        let mut stream = TcpStream::connect(&addr).await?;
-        stream.write_all(request.as_bytes()).await?;
-
-        let mut buf = Vec::new();
-        tokio::time::timeout(Duration::from_secs(timeout), stream.read_to_end(&mut buf)).await??;
-        String::from_utf8_lossy(&buf).to_string()
-    };
+    let mut buf = Vec::new();
+    tokio::time::timeout(Duration::from_secs(timeout), stream.read_to_end(&mut buf)).await??;
+    let response_str = String::from_utf8_lossy(&buf).to_string();
 
     let duration = start.elapsed();
 
@@ -71,3 +76,4 @@ pub async fn send_request(
 
     Ok((response_str, duration))
 }
+

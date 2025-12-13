@@ -38,7 +38,11 @@ impl Error for SmugglexError {}
 
 impl From<std::io::Error> for SmugglexError {
     fn from(err: std::io::Error) -> Self {
-        SmugglexError::Io(err.to_string())
+        if err.kind() == std::io::ErrorKind::TimedOut {
+            SmugglexError::Timeout(err.to_string())
+        } else {
+            SmugglexError::Io(err.to_string())
+        }
     }
 }
 
