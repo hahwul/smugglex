@@ -161,10 +161,16 @@ This will display all available options and usage information.
 
 ### Test Basic Functionality
 
-You can test the tool with a simple command (replace with a URL you have permission to test):
+Test that the tool is working correctly by running the help command:
 
 ```bash
 smugglex --help
+```
+
+You should see the usage information and available options. When you're ready to test on a system you have permission to scan, you can run a basic test (replace with a URL you own or have authorization to test):
+
+```bash
+smugglex https://your-test-system.com/ -v
 ```
 
 ## Basic Usage
