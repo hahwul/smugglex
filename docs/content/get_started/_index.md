@@ -7,130 +7,123 @@ sort_by = "weight"
 [extra]
 +++
 
-# Getting Started with Smugglex
+# Getting Started
 
-Welcome to the smugglex documentation! This section will guide you through everything you need to know to start testing for HTTP Request Smuggling vulnerabilities.
+This section guides you through using smugglex to test for HTTP Request Smuggling vulnerabilities.
 
-## What You'll Learn
+## What You Will Learn
 
-In this section, you'll find:
-
-- **[Overview](/get_started/overview)**: Learn about HTTP Request Smuggling vulnerabilities, how they work, and why smugglex is the tool you need
-- **[Installation](/get_started/installation)**: Step-by-step instructions to install smugglex on your system
+- [Overview](/get_started/overview) - Learn about HTTP Request Smuggling and smugglex
+- [Installation](/get_started/installation) - Install smugglex on your system
 
 ## Quick Start
 
-If you're eager to get started, here's the fastest way to begin:
-
-### 1. Install Smugglex
+### Install
 
 ```bash
 cargo install smugglex
 ```
 
-### 2. Run Your First Scan
+### Run First Scan
 
 ```bash
 smugglex https://example.com/
 ```
 
-### 3. Review Results
+### Review Results
 
-Smugglex will automatically test for all major HTTP Request Smuggling attack types and report any vulnerabilities found.
+Smugglex tests for all major HTTP Request Smuggling attack types and reports vulnerabilities.
 
 ## Learning Path
 
-We recommend following this learning path:
+Follow these steps:
 
-1. **Understand the Basics**: Read the [Overview](/get_started/overview) to understand what HTTP Request Smuggling is and how smugglex detects it
-2. **Install the Tool**: Follow the [Installation](/get_started/installation) guide to get smugglex up and running
-3. **Run Tests**: Start with simple scans on systems you have permission to test
-4. **Explore Options**: Experiment with different command-line options and configurations
-5. **Analyze Results**: Learn to interpret scan results and understand vulnerability details
+1. Read the [Overview](/get_started/overview) to understand HTTP Request Smuggling
+2. Follow the [Installation](/get_started/installation) guide to install smugglex
+3. Run simple scans on systems you have permission to test
+4. Experiment with different command-line options
+5. Learn to interpret scan results
 
-## Example Workflow
+## Examples
 
-Here's a typical workflow for using smugglex:
+### Basic Scan
 
 ```bash
-# Basic scan
 smugglex https://target.com/
+```
 
-# Scan with verbose output and save results
+### Verbose Output and Save Results
+
+```bash
 smugglex https://target.com/ -v -o results.json
+```
 
-# Scan with custom headers and timeout
+### Custom Headers and Timeout
+
+```bash
 smugglex https://target.com/ -H "Authorization: Bearer token" -t 15
+```
 
-# Scan multiple URLs from a file
+### Multiple URLs
+
+```bash
 cat urls.txt | smugglex -v
+```
 
-# Run specific checks only
+### Specific Checks
+
+```bash
 smugglex https://target.com/ -c cl-te,te-cl
+```
 
-# Export vulnerable payloads for manual verification
+### Export Payloads
+
+```bash
 smugglex https://target.com/ --export-payloads ./payloads
 ```
 
 ## Key Concepts
 
-Before you dive in, here are some key concepts to understand:
-
 ### HTTP Request Smuggling
 
-A technique that exploits discrepancies in how front-end and back-end servers parse HTTP requests. When servers disagree on request boundaries, attackers can "smuggle" malicious requests through security controls.
+HTTP Request Smuggling exploits differences in how servers parse requests. When servers disagree on request boundaries, attackers can smuggle malicious requests through security controls.
 
 ### Attack Types
 
-Smugglex tests for multiple attack types:
-- **CL.TE**: Content-Length vs Transfer-Encoding desynchronization
-- **TE.CL**: Transfer-Encoding vs Content-Length desynchronization
-- **TE.TE**: Transfer-Encoding obfuscation (60+ variations)
-- **H2C**: HTTP/2 Cleartext smuggling
-- **H2**: HTTP/2 protocol-level smuggling
+Smugglex tests for these attack types:
+
+- CL.TE - Content-Length vs Transfer-Encoding desync
+- TE.CL - Transfer-Encoding vs Content-Length desync
+- TE.TE - Transfer-Encoding obfuscation (40+ variations)
+- H2C - HTTP/2 Cleartext smuggling (20+ payloads)
+- H2 - HTTP/2 protocol-level smuggling (25+ payloads)
 
 ### Timing-Based Detection
 
-Smugglex uses sophisticated timing analysis to detect vulnerabilities. By comparing response times between normal requests and attack requests, the tool can reliably identify desynchronization issues.
+Smugglex uses timing analysis to detect vulnerabilities. The tool compares response times between normal and attack requests to identify desynchronization.
 
 ## Prerequisites
 
-To use smugglex effectively, you should have:
+To use smugglex, you need:
 
 - Basic understanding of HTTP protocol
 - Knowledge of web application security
 - Authorization to test target systems
-- Familiarity with command-line tools
+- Command-line tool experience
 
 ## Security Notice
 
-⚠️ **Important**: Smugglex is a powerful security testing tool designed for:
+This tool is for authorized security testing only. Use smugglex only on:
 
-- Authorized penetration testing
-- Security research in controlled environments
-- Bug bounty hunting on in-scope targets
-- Educational purposes in lab settings
+- Systems you own
+- Systems with explicit written permission
+- Authorized penetration testing engagements
+- Educational purposes in controlled environments
 
-**Never** use smugglex on systems you don't own or don't have explicit written permission to test. Unauthorized testing may be illegal and unethical.
+Unauthorized testing may be illegal.
 
-## Getting Help
+## References
 
-Need assistance?
-
-- Use `smugglex --help` for command-line help
-- Check the [GitHub repository](https://github.com/hahwul/smugglex) for examples
-- Open an [issue](https://github.com/hahwul/smugglex/issues) if you find bugs
-- Follow [@hahwul](https://twitter.com/hahwul) on Twitter for updates
-
-## Contributing
-
-Smugglex is open-source and welcomes contributions! If you want to help improve the tool:
-
-- Report bugs and suggest features via [GitHub Issues](https://github.com/hahwul/smugglex/issues)
-- Submit pull requests with improvements
-- Share your findings and help improve detection methods
-- Contribute documentation and examples
-
-## Ready to Begin?
-
-Start with the [Overview](/get_started/overview) to understand HTTP Request Smuggling, or jump straight to [Installation](/get_started/installation) if you're ready to install the tool.
+- [GitHub Repository](https://github.com/hahwul/smugglex)
+- [Issue Tracker](https://github.com/hahwul/smugglex/issues)
+- Command-line help: `smugglex --help`
