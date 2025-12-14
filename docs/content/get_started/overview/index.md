@@ -43,14 +43,14 @@ Smugglex tests for five attack types:
 
 - CL.TE - Front-end uses Content-Length, back-end uses Transfer-Encoding
 - TE.CL - Front-end uses Transfer-Encoding, back-end uses Content-Length
-- TE.TE - Both use Transfer-Encoding with obfuscation (60+ variations)
+- TE.TE - Both use Transfer-Encoding with obfuscation (40+ variations)
 - H2C - HTTP/1.1 to HTTP/2 upgrade exploitation (20+ payloads)
-- H2 - HTTP/2 protocol-level smuggling (25+ attack vectors)
+- H2 - HTTP/2 protocol-level smuggling (25+ payloads)
 
 ### Detection Methods
 
 - Timing-based detection analyzes response times to find desynchronization
-- Extended mutation testing with 60+ Transfer-Encoding variations
+- Extended mutation testing with 40+ Transfer-Encoding variations
 - HTTP/2 protocol support for H2C and H2 desync detection
 - Connection timeout detection identifies vulnerabilities through behavior
 

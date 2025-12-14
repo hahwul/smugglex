@@ -94,9 +94,9 @@ Smugglex tests for these attack types:
 
 - CL.TE - Content-Length vs Transfer-Encoding desync
 - TE.CL - Transfer-Encoding vs Content-Length desync
-- TE.TE - Transfer-Encoding obfuscation (60+ variations)
-- H2C - HTTP/2 Cleartext smuggling
-- H2 - HTTP/2 protocol-level smuggling
+- TE.TE - Transfer-Encoding obfuscation (40+ variations)
+- H2C - HTTP/2 Cleartext smuggling (20+ payloads)
+- H2 - HTTP/2 protocol-level smuggling (25+ payloads)
 
 ### Timing-Based Detection
 

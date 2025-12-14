@@ -21,7 +21,7 @@ HTTP Request Smuggling exploits differences in how front-end and back-end server
 ### Key Features
 
 - Detect multiple attack types: CL.TE, TE.CL, TE.TE, H2C, and H2
-- Test 30+ variations of Transfer-Encoding header obfuscations
+- Test 40+ variations of Transfer-Encoding header obfuscations
 - Support HTTP/2 protocol-level desync detection
 - Export vulnerable payloads for manual verification
 - Save scan results in JSON format
@@ -153,9 +153,9 @@ The tool tests for these attack types:
 
 - CL.TE - Content-Length vs Transfer-Encoding desync
 - TE.CL - Transfer-Encoding vs Content-Length desync
-- TE.TE - Transfer-Encoding obfuscation with 30+ variations
-- H2C - HTTP/2 Cleartext smuggling
-- H2 - HTTP/2 protocol-level smuggling
+- TE.TE - Transfer-Encoding obfuscation with 40+ variations
+- H2C - HTTP/2 Cleartext smuggling with 20+ payloads
+- H2 - HTTP/2 protocol-level smuggling with 25+ payloads
 
 ## Examples
 
