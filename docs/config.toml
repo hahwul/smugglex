@@ -41,7 +41,7 @@ nav = [
 ]
 
 [extra.logo]
-text = "Goyo"                              # Text when no logo image
+text = "SmuggleX"                              # Text when no logo image
 image_path = "images/smugglex-dark.png"             # Default logo image path
 image_padding = "10px"                      # Optional padding
 dark_image_path = "images/smugglex-dark.png"   # Logo for dark theme (optional)
