@@ -176,8 +176,10 @@ fn log_scan_results(results: &[CheckResult], format: &str, target_url: &str, met
             timestamp: Utc::now().to_rfc3339(),
             checks: results.to_vec(),
         };
-        let json_output = serde_json::to_string_pretty(&scan_results).unwrap();
-        println!("{}", json_output);
+        match serde_json::to_string_pretty(&scan_results) {
+            Ok(json_output) => println!("{}", json_output),
+            Err(e) => log(LogLevel::Error, &format!("failed to serialize results to JSON: {}", e)),
+        }
     } else {
         // Plain text output
         if vulnerable_count > 0 {

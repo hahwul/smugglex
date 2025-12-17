@@ -223,6 +223,12 @@ fn test_format_plain_explicit() {
     assert_eq!(cli.format, "plain", "format should be plain when explicitly set");
 }
 
+#[test]
+fn test_format_invalid_value() {
+    let result = Cli::try_parse_from(&["smugglex", "http://example.com", "--format", "invalid"]);
+    assert!(result.is_err(), "format should reject invalid values");
+}
+
 // Test exit-first option
 #[test]
 fn test_exit_first_short_flag() {

@@ -58,6 +58,6 @@ pub struct Cli {
     pub exit_first: bool,
 
     /// Output format (plain or json)
-    #[arg(short = 'f', long = "format", default_value = "plain")]
+    #[arg(short = 'f', long = "format", default_value = "plain", value_parser = ["plain", "json"])]
     pub format: String,
 }
