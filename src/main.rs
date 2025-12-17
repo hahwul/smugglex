@@ -7,7 +7,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
 use url::Url;
 
-use smugglex::cli::Cli;
+use smugglex::cli::{Cli, OutputFormat};
 use smugglex::error::Result;
 use smugglex::model::{CheckResult, ScanResults};
 use smugglex::payloads::{
@@ -166,10 +166,10 @@ fn setup_progress_bar(verbose: bool) -> ProgressBar {
     }
 }
 
-fn log_scan_results(results: &[CheckResult], format: &str, target_url: &str, method: &str) {
+fn log_scan_results(results: &[CheckResult], format: &OutputFormat, target_url: &str, method: &str) {
     let vulnerable_count = results.iter().filter(|r| r.vulnerable).count();
 
-    if format == "json" {
+    if format.is_json() {
         let scan_results = ScanResults {
             target: target_url.to_string(),
             method: method.to_string(),
@@ -178,9 +178,18 @@ fn log_scan_results(results: &[CheckResult], format: &str, target_url: &str, met
         };
         match serde_json::to_string_pretty(&scan_results) {
             Ok(json_output) => println!("{}", json_output),
-            Err(e) => log(LogLevel::Error, &format!("failed to serialize results to JSON: {}", e)),
+            Err(e) => {
+                log(LogLevel::Error, &format!("failed to serialize results to JSON: {}", e));
+                log(LogLevel::Info, "falling back to plain text output");
+                log_plain_results(results, vulnerable_count);
+            }
         }
     } else {
+        log_plain_results(results, vulnerable_count);
+    }
+}
+
+fn log_plain_results(results: &[CheckResult], vulnerable_count: usize) {
         // Plain text output
         if vulnerable_count > 0 {
             log(
@@ -216,9 +225,8 @@ fn log_scan_results(results: &[CheckResult], format: &str, target_url: &str, met
                 }
                 println!();
             }
-        } else {
-            log(LogLevel::Info, "smuggling found 0 vulnerabilities");
-        }
+    } else {
+        log(LogLevel::Info, "smuggling found 0 vulnerabilities");
     }
 }
 
