@@ -56,4 +56,8 @@ pub struct Cli {
     /// Exit quickly after finding the first vulnerability
     #[arg(short = '1', long = "exit-first", action = clap::ArgAction::SetTrue)]
     pub exit_first: bool,
+
+    /// Output format (plain or json)
+    #[arg(short = 'f', long = "format", default_value = "plain")]
+    pub format: String,
 }

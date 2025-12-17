@@ -136,7 +136,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
         pb.finish_and_clear();
     }
 
-    log_scan_results(&results);
+    log_scan_results(&results, &cli.format, target_url, &cli.method);
 
     if let Some(ref output_file) = cli.output {
         save_results_to_file(output_file, target_url, &cli.method, results)?;
@@ -166,45 +166,57 @@ fn setup_progress_bar(verbose: bool) -> ProgressBar {
     }
 }
 
-fn log_scan_results(results: &[CheckResult]) {
+fn log_scan_results(results: &[CheckResult], format: &str, target_url: &str, method: &str) {
     let vulnerable_count = results.iter().filter(|r| r.vulnerable).count();
 
-    if vulnerable_count > 0 {
-        log(
-            LogLevel::Warning,
-            &format!("smuggling found {} vulnerability(ies)", vulnerable_count),
-        );
-        println!();
-        for result in results.iter().filter(|r| r.vulnerable) {
-            println!(
-                "{}",
-                format!("=== {} Vulnerability Details ===", result.check_type).bold()
-            );
-            println!("{} {}", "Status:".bold(), "VULNERABLE".red().bold());
-            if let Some(idx) = result.payload_index {
-                println!("{} {}", "Payload Index:".bold(), idx);
-            }
-            if let Some(ref status) = result.attack_status {
-                println!("{} {}", "Attack Response:".bold(), status);
-            }
-            if let Some(attack_ms) = result.attack_duration_ms {
-                println!(
-                    "{} Normal: {}ms, Attack: {}ms",
-                    "Timing:".bold(),
-                    result.normal_duration_ms,
-                    attack_ms
-                );
-            }
-            if let Some(ref payload) = result.payload {
-                println!("\n{}", "HTTP Raw Request:".bold());
-                println!("{}", "─".repeat(60).dimmed());
-                println!("{}", payload.cyan());
-                println!("{}", "─".repeat(60).dimmed());
-            }
-            println!();
-        }
+    if format == "json" {
+        let scan_results = ScanResults {
+            target: target_url.to_string(),
+            method: method.to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            checks: results.to_vec(),
+        };
+        let json_output = serde_json::to_string_pretty(&scan_results).unwrap();
+        println!("{}", json_output);
     } else {
-        log(LogLevel::Info, "smuggling found 0 vulnerabilities");
+        // Plain text output
+        if vulnerable_count > 0 {
+            log(
+                LogLevel::Warning,
+                &format!("smuggling found {} vulnerability(ies)", vulnerable_count),
+            );
+            println!();
+            for result in results.iter().filter(|r| r.vulnerable) {
+                println!(
+                    "{}",
+                    format!("=== {} Vulnerability Details ===", result.check_type).bold()
+                );
+                println!("{} {}", "Status:".bold(), "VULNERABLE".red().bold());
+                if let Some(idx) = result.payload_index {
+                    println!("{} {}", "Payload Index:".bold(), idx);
+                }
+                if let Some(ref status) = result.attack_status {
+                    println!("{} {}", "Attack Response:".bold(), status);
+                }
+                if let Some(attack_ms) = result.attack_duration_ms {
+                    println!(
+                        "{} Normal: {}ms, Attack: {}ms",
+                        "Timing:".bold(),
+                        result.normal_duration_ms,
+                        attack_ms
+                    );
+                }
+                if let Some(ref payload) = result.payload {
+                    println!("\n{}", "HTTP Raw Request:".bold());
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!("{}", payload.cyan());
+                    println!("{}", "─".repeat(60).dimmed());
+                }
+                println!();
+            }
+        } else {
+            log(LogLevel::Info, "smuggling found 0 vulnerabilities");
+        }
     }
 }
 
