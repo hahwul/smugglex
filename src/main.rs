@@ -2,7 +2,6 @@ use chrono::Utc;
 use clap::Parser;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-use serde_json;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
