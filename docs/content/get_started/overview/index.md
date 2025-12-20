@@ -137,4 +137,7 @@ Unauthorized testing may be illegal in your jurisdiction. Always obtain proper a
 
 ## Next Steps
 
-Visit the [Installation](/get_started/installation) guide to install smugglex and begin testing.
+- Install smugglex by following the [Installation](/get_started/installation) guide
+- Learn how to run scans with [Running SmuggleX](/get_started/running)
+- Understand HTTP Request Smuggling in depth at [Resources](/resources/http-smuggling)
+- Explore development options in [Development](/development)

@@ -65,7 +65,11 @@ You should see the version number.
 
 Build from source to access the latest development version.
 
-#### Clone the Repository
+For detailed build instructions and development setup, see the [Development Guide](/development/building).
+
+#### Quick Build
+
+Clone the repository:
 
 ```bash
 git clone https://github.com/hahwul/smugglex
@@ -306,6 +310,8 @@ If you experience connection timeouts:
 
 ## References
 
-- [HTTP Request Smuggling Overview](/get_started/overview)
+- [Running SmuggleX](/get_started/running) - Learn how to run smugglex
+- [Overview](/get_started/overview) - HTTP Request Smuggling overview
+- [Development](/development/building) - Building from source for development
 - [GitHub Repository](https://github.com/hahwul/smugglex)
 - [Issue Tracker](https://github.com/hahwul/smugglex/issues)

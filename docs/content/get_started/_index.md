@@ -15,6 +15,7 @@ This section guides you through using smugglex to test for HTTP Request Smugglin
 
 - [Overview](/get_started/overview) - Learn about HTTP Request Smuggling and smugglex
 - [Installation](/get_started/installation) - Install smugglex on your system
+- [Running SmuggleX](/get_started/running) - Learn how to run smugglex and configure scans
 
 ## Quick Start
 
@@ -34,53 +35,7 @@ smugglex https://example.com/
 
 Smugglex tests for all major HTTP Request Smuggling attack types and reports vulnerabilities.
 
-## Learning Path
-
-Follow these steps:
-
-1. Read the [Overview](/get_started/overview) to understand HTTP Request Smuggling
-2. Follow the [Installation](/get_started/installation) guide to install smugglex
-3. Run simple scans on systems you have permission to test
-4. Experiment with different command-line options
-5. Learn to interpret scan results
-
-## Examples
-
-### Basic Scan
-
-```bash
-smugglex https://target.com/
-```
-
-### Verbose Output and Save Results
-
-```bash
-smugglex https://target.com/ -v -o results.json
-```
-
-### Custom Headers and Timeout
-
-```bash
-smugglex https://target.com/ -H "Authorization: Bearer token" -t 15
-```
-
-### Multiple URLs
-
-```bash
-cat urls.txt | smugglex -v
-```
-
-### Specific Checks
-
-```bash
-smugglex https://target.com/ -c cl-te,te-cl
-```
-
-### Export Payloads
-
-```bash
-smugglex https://target.com/ --export-payloads ./payloads
-```
+For more detailed usage examples, see [Running SmuggleX](/get_started/running).
 
 ## Key Concepts
 
