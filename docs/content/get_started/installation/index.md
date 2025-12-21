@@ -27,6 +27,21 @@ Install smugglex using Snap:
 snap install smugglex
 ```
 
+### Debian Package (.deb)
+
+Download and install the Debian package from the [GitHub releases page](https://github.com/hahwul/smugglex/releases):
+
+```bash
+# Download the latest .deb package (example for version 0.1.0)
+wget https://github.com/hahwul/smugglex/releases/download/v0.1.0/smugglex_0.1.0_amd64.deb
+
+# Install the package
+sudo dpkg -i smugglex_0.1.0_amd64.deb
+
+# If there are dependency issues, fix them with:
+sudo apt-get install -f
+```
+
 ### Direct Binary Download
 
 Download the latest release for your platform from the [GitHub releases page](https://github.com/hahwul/smugglex/releases).
