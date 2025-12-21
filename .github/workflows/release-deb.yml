@@ -1,0 +1,70 @@
+---
+name: Build and Release .deb Package
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+permissions:
+  contents: write
+jobs:
+  build-deb:
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v5
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Get Version
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+      - name: Build smugglex Binary
+        run: |
+          docker run --rm --platform linux/${{ matrix.arch }} -v $(pwd):/workspace -w /workspace rust:1.83-slim sh -c "
+            apt-get update && apt-get install -y musl-tools ca-certificates &&
+            if [ '${{ matrix.arch }}' = 'amd64' ]; then
+              rustup target add x86_64-unknown-linux-musl &&
+              cargo build --release --target x86_64-unknown-linux-musl &&
+              cp target/x86_64-unknown-linux-musl/release/smugglex smugglex
+            else
+              apt-get install -y gcc-aarch64-linux-gnu &&
+              rustup target add aarch64-unknown-linux-musl &&
+              export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc &&
+              export CC=aarch64-linux-gnu-gcc &&
+              cargo build --release --target aarch64-unknown-linux-musl &&
+              cp target/aarch64-unknown-linux-musl/release/smugglex smugglex
+            fi
+          "
+      - name: Create Debian Package Structure
+        run: |
+          mkdir -p smugglex_${{ env.VERSION }}_${{ matrix.arch }}/DEBIAN
+          mkdir -p smugglex_${{ env.VERSION }}_${{ matrix.arch }}/usr/bin
+          mkdir -p smugglex_${{ env.VERSION }}_${{ matrix.arch }}/usr/share/doc/smugglex
+          cp smugglex smugglex_${{ env.VERSION }}_${{ matrix.arch }}/usr/bin/
+          cp README.md smugglex_${{ env.VERSION }}_${{ matrix.arch }}/usr/share/doc/smugglex/
+      - name: Create DEBIAN/control file
+        run: |
+          cat > smugglex_${{ env.VERSION }}_${{ matrix.arch }}/DEBIAN/control << EOF
+          Package: smugglex
+          Version: ${{ env.VERSION }}
+          Architecture: ${{ matrix.arch }}
+          Maintainer: hahwul <hahwul@gmail.com>
+          Description: A powerful HTTP Request Smuggling testing tool written in Rust.
+           smugglex is a security testing tool designed to detect various types of HTTP
+           request smuggling vulnerabilities in web applications and proxies.
+          Depends: libc6 (>= 2.17)
+          EOF
+      - name: Build .deb Package
+        run: |
+          dpkg-deb --build smugglex_${{ env.VERSION }}_${{ matrix.arch }}
+      - name: Upload .deb to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            smugglex_${{ env.VERSION }}_${{ matrix.arch }}.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
