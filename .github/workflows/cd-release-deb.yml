@@ -1,0 +1,40 @@
+name: Upload .deb on Release Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb package
+        run: cargo deb
+
+      - name: Upload .deb files to the released tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Uploading .deb files to release ${{ github.event.release.tag_name }} ..."
+          for file in target/debian/*.deb; do
+            [ -f "$file" ] || continue
+            echo "Uploading $(basename "$file")"
+            gh release upload "${{ github.event.release.tag_name }}" "$file" --clobber
+          done
