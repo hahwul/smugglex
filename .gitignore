@@ -5,6 +5,3 @@ results.json
 docs/public
 
 .DS_Store
-
-# direnv
-.direnv/
