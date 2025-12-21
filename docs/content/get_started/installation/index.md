@@ -33,10 +33,10 @@ Download and install the Debian package from the [GitHub releases page](https://
 
 ```bash
 # Download the latest .deb package (example for version 0.1.0)
-wget https://github.com/hahwul/smugglex/releases/download/v0.1.0/smugglex_0.1.0_amd64.deb
+wget https://github.com/hahwul/smugglex/releases/download/v0.1.0/smugglex_0_1_0_-1_amd64.deb
 
 # Install the package
-sudo dpkg -i smugglex_0.1.0_amd64.deb
+sudo dpkg -i smugglex_0_1_0_-1_amd64.deb
 
 # If there are dependency issues, fix them with:
 sudo apt-get install -f
