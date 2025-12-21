@@ -29,6 +29,7 @@
         packages = {
           smugglex = rustPlatform.buildRustPackage {
             pname = "smugglex";
+            # Note: Version should be updated manually when releasing new versions
             version = "0.0.1";
 
             src = ./.;
@@ -41,11 +42,12 @@
               pkg-config
             ];
 
-            buildInputs = with pkgs; [
-            ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.darwin.apple_sdk.frameworks.Security
-              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-            ];
+            # smugglex uses rustls instead of OpenSSL, so no additional buildInputs needed
+            # Only macOS-specific frameworks are required
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
+              Security
+              SystemConfiguration
+            ]);
 
             meta = with pkgs.lib; {
               description = "A powerful HTTP Request Smuggling testing tool written in Rust";
