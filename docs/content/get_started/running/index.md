@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# Running SmuggleX
-
 This guide shows you how to run smugglex and configure scans for different testing scenarios.
 
 ## Basic Usage

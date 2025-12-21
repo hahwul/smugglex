@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# Overview
-
 Smugglex is a security testing tool that detects HTTP Request Smuggling vulnerabilities in web applications. The tool is written in Rust and designed for penetration testing and security research.
 
 ## What is HTTP Request Smuggling?

@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# What is HTTP Request Smuggling?
-
 HTTP Request Smuggling is a critical web security vulnerability that exploits differences in how servers parse HTTP requests. This technique allows attackers to interfere with how web applications process request sequences.
 
 ## Overview

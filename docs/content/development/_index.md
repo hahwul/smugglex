@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# Development
-
 This section provides information for developers who want to contribute to smugglex or build it from source.
 
 ## Overview

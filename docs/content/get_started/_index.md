@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# Getting Started
-
 This section guides you through using smugglex to test for HTTP Request Smuggling vulnerabilities.
 
 ## What You Will Learn

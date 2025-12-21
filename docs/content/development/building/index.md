@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# Building from Source
-
 This guide shows you how to build smugglex from source code for development or to access the latest features.
 
 ## Prerequisites

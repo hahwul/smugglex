@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# References and Research
-
 This page provides links to research papers, security advisories, tools, and educational resources related to HTTP Request Smuggling.
 
 ## Research Papers and Presentations

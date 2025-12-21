@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# Resources
-
 This section provides resources to help you understand HTTP Request Smuggling vulnerabilities and related security research.
 
 ## Quick Links

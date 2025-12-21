@@ -7,8 +7,6 @@ sort_by = "weight"
 [extra]
 +++
 
-# Installation
-
 This guide shows you how to install smugglex on your system.
 
 ## Prerequisites
