@@ -1,7 +1,13 @@
+# Rust
 /target
 *.log
 results.json
 
+# Goyo
 docs/public
 
+# MacOS
 .DS_Store
+
+# Nix
+/result
