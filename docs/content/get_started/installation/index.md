@@ -9,63 +9,40 @@ sort_by = "weight"
 
 This guide shows you how to install smugglex on your system.
 
-## Prerequisites
-
-Before installing, ensure you have:
-
-- Operating System: Linux, macOS, or Windows with WSL
-- Rust: Version 1.70 or later (for building from source)
-- Network Access: HTTP and HTTPS connections enabled
-
 ## Installation Methods
 
-### Install from crates.io
+### Homebrew (macOS and Linux)
 
-This is the recommended installation method. It requires Rust and Cargo.
-
-#### Install Rust and Cargo
-
-Install Rust using rustup:
+Install smugglex using Homebrew:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+brew install hahwul/smugglex/smugglex
 ```
 
-For Windows, download the installer from [rustup.rs](https://rustup.rs/).
+### Snapcraft (Linux)
 
-Restart your terminal or run:
+Install smugglex using Snap:
 
 ```bash
-source $HOME/.cargo/env
+snap install smugglex
 ```
 
-#### Install Smugglex
+### Direct Binary Download
 
-Install smugglex with Cargo:
+Download the latest release for your platform from the [GitHub releases page](https://github.com/hahwul/smugglex/releases).
+
+Extract and install the binary:
 
 ```bash
-cargo install smugglex
+tar -xzf smugglex-*.tar.gz
+sudo mv smugglex /usr/local/bin/
 ```
-
-This installs smugglex to `~/.cargo/bin/` in your PATH.
-
-#### Verify Installation
-
-Check the installation:
-
-```bash
-smugglex --version
-```
-
-You should see the version number.
 
 ### Build from Source
 
-Build from source to access the latest development version.
+Build from source to access the latest development version. This requires Rust 1.70 or later.
 
 For detailed build instructions and development setup, see the [Development Guide](/development/building).
-
-#### Quick Build
 
 Clone the repository:
 
@@ -74,70 +51,10 @@ git clone https://github.com/hahwul/smugglex
 cd smugglex
 ```
 
-#### Build and Install
-
 Install with Cargo:
 
 ```bash
 cargo install --path .
-```
-
-Or build without installing:
-
-```bash
-cargo build --release
-```
-
-The binary is at `./target/release/smugglex`. Run it directly:
-
-```bash
-./target/release/smugglex --version
-```
-
-#### Add to PATH
-
-Copy the binary to your PATH:
-
-```bash
-sudo cp target/release/smugglex /usr/local/bin/
-```
-
-Or add the target directory to PATH:
-
-```bash
-export PATH="$PATH:$(pwd)/target/release"
-```
-
-## Updating Smugglex
-
-### Update from crates.io
-
-Update to the latest version:
-
-```bash
-cargo install smugglex --force
-```
-
-The `--force` flag overwrites the existing installation.
-
-### Update from Source
-
-Navigate to the repository:
-
-```bash
-cd /path/to/smugglex
-```
-
-Pull the latest changes:
-
-```bash
-git pull origin main
-```
-
-Rebuild and reinstall:
-
-```bash
-cargo install --path . --force
 ```
 
 ## Verify Installation
@@ -257,7 +174,19 @@ smugglex https://example.com/ --export-payloads ./payloads
 
 ### Command Not Found
 
-Check if `~/.cargo/bin` is in your PATH:
+Check if the binary is in your PATH:
+
+```bash
+which smugglex
+```
+
+If using Homebrew, ensure Homebrew is in your PATH:
+
+```bash
+export PATH="/usr/local/bin:$PATH"
+```
+
+If building from source, check if `~/.cargo/bin` is in your PATH:
 
 ```bash
 echo $PATH | grep .cargo/bin
@@ -277,7 +206,7 @@ source ~/.bashrc
 
 ### Build Errors
 
-Update Rust to the latest version:
+When building from source, update Rust to the latest version:
 
 ```bash
 rustup update

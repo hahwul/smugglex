@@ -56,37 +56,37 @@ Timing: Normal: 1263ms, Attack: 10000ms
 
 ## Installation
 
-### Prerequisites
-
-- Rust 1.70 or later
-- Cargo package manager
-
-### Install from crates.io
+### Homebrew (macOS and Linux)
 
 ```bash
-cargo install smugglex
+brew install hahwul/smugglex/smugglex
+```
+
+### Snapcraft (Linux)
+
+```bash
+snap install smugglex
+```
+
+### Direct Binary Download
+
+Download the latest release for your platform from the [GitHub releases page](https://github.com/hahwul/smugglex/releases).
+
+Extract and install:
+
+```bash
+tar -xzf smugglex-*.tar.gz
+sudo mv smugglex /usr/local/bin/
 ```
 
 ### Build from Source
 
-Clone the repository:
+Requires Rust 1.70 or later. Clone the repository and install:
 
 ```bash
 git clone https://github.com/hahwul/smugglex
 cd smugglex
-```
-
-Install with Cargo:
-
-```bash
 cargo install --path .
-```
-
-Or build without installing:
-
-```bash
-cargo build --release
-./target/release/smugglex
 ```
 
 ## Usage
