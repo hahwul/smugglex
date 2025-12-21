@@ -27,6 +27,20 @@ Install smugglex using Snap:
 snap install smugglex
 ```
 
+### Nix (Linux and macOS)
+
+Install smugglex using Nix package manager:
+
+```bash
+nix profile install github:hahwul/smugglex
+```
+
+Or run directly without installation:
+
+```bash
+nix run github:hahwul/smugglex
+```
+
 ### Debian Package (.deb)
 
 Download and install the Debian package from the [GitHub releases page](https://github.com/hahwul/smugglex/releases):

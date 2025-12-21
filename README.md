@@ -68,6 +68,29 @@ brew install hahwul/smugglex/smugglex
 snap install smugglex
 ```
 
+### Nix (Linux and macOS)
+
+Using Nix flakes (recommended):
+
+```bash
+nix run github:hahwul/smugglex
+```
+
+Or install to your profile:
+
+```bash
+nix profile install github:hahwul/smugglex
+```
+
+To build locally:
+
+```bash
+git clone https://github.com/hahwul/smugglex
+cd smugglex
+nix build
+./result/bin/smugglex
+```
+
 ### Direct Binary Download
 
 Download the latest release for your platform from the [GitHub releases page](https://github.com/hahwul/smugglex/releases).
