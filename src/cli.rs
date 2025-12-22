@@ -26,7 +26,7 @@ impl OutputFormat {
     }
 }
 
-/// HTTP Request Smuggling tester
+/// A powerful HTTP Request Smuggling testing tool for detecting CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling vulnerabilities
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None, before_help = r#"
 
@@ -40,7 +40,7 @@ impl OutputFormat {
       █   █  ██
 "#)]
 pub struct Cli {
-    /// Target URLs
+    /// Target URLs (supports multiple URLs and stdin input)
     pub urls: Vec<String>,
 
     /// Custom method for the attack request
