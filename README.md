@@ -18,21 +18,9 @@
 
 ## Overview
 
-Smugglex is a security testing tool that detects HTTP Request Smuggling vulnerabilities in web applications. The tool tests for multiple attack types including CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling.
+Smugglex is a security testing tool that detects HTTP Request Smuggling vulnerabilities in web applications. It tests for CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling attacks.
 
-HTTP Request Smuggling exploits differences in how front-end and back-end servers parse HTTP requests. When servers disagree on request boundaries, attackers can smuggle malicious requests through security controls. This leads to security vulnerabilities such as bypassing firewalls, poisoning caches, and accessing unauthorized resources.
-
-### Key Features
-
-- Detect multiple attack types: CL.TE, TE.CL, TE.TE, H2C, and H2
-- Test 40+ variations of Transfer-Encoding header obfuscations
-- Support HTTP/2 protocol-level desync detection
-- Export vulnerable payloads for manual verification
-- Save scan results in JSON format
-- Read URLs from stdin for pipeline integration
-- Configure custom headers, cookies, and virtual hosts
-
-![](docs/static/images/sample.jpg)
+For detailed documentation, visit [smugglex.hahwul.com](https://smugglex.hahwul.com).
 
 ## Installation
 
@@ -42,49 +30,9 @@ HTTP Request Smuggling exploits differences in how front-end and back-end server
 brew install hahwul/smugglex/smugglex
 ```
 
-### Snapcraft (Linux)
-
-```bash
-snap install smugglex
-```
-
-### Nix (Linux and macOS)
-
-Using Nix flakes (recommended):
-
-```bash
-nix run github:hahwul/smugglex
-```
-
-Or install to your profile:
-
-```bash
-nix profile install github:hahwul/smugglex
-```
-
-To build locally:
-
-```bash
-git clone https://github.com/hahwul/smugglex
-cd smugglex
-nix build
-./result/bin/smugglex
-```
-
-### Direct Binary Download
-
-Download the latest release for your platform from the [GitHub releases page](https://github.com/hahwul/smugglex/releases).
-
-Extract and install:
-
-```bash
-tar -xzf smugglex-*.tar.gz
-sudo mv smugglex /usr/local/bin/
-```
-
 ### Build from Source
 
-Requires Rust 1.70 or later. Clone the repository and install:
+Requires Rust 1.70 or later:
 
 ```bash
 git clone https://github.com/hahwul/smugglex
@@ -92,168 +40,45 @@ cd smugglex
 cargo install --path .
 ```
 
+For other installation methods, see [Installation Guide](https://smugglex.hahwul.com/installation).
+
 ## Usage
 
-### Basic Scan
-
-Run a basic scan on a target URL:
+Basic scan:
 
 ```bash
 smugglex https://target.com
 ```
 
-### Common Options
-
-```bash
-smugglex https://target.com -v              # Enable verbose output
-smugglex https://target.com -t 15           # Set timeout to 15 seconds
-smugglex https://target.com -o results.json # Save results to JSON file
-smugglex https://target.com --exit-first    # Stop after first vulnerability
-```
-
-### Scan Multiple URLs
-
-Read URLs from a file:
+Read URLs from stdin:
 
 ```bash
 cat urls.txt | smugglex
 ```
 
-### Custom Configuration
-
-Specify HTTP method:
-
-```bash
-smugglex https://target.com -m POST
-```
-
-Add custom headers:
-
-```bash
-smugglex https://target.com -H "Authorization: Bearer token"
-```
-
-Run specific checks:
-
-```bash
-smugglex https://target.com -c cl-te,te-cl
-```
+For detailed usage and options, see [Usage Guide](https://smugglex.hahwul.com/usage).
 
 ## Configuration
 
-### Command-Line Options
+Run `smugglex --help` for all command-line options.
 
-- `-m, --method <METHOD>` - HTTP method to use (default: POST)
-- `-t, --timeout <TIMEOUT>` - Socket timeout in seconds (default: 10)
-- `-v, --verbose` - Enable verbose output
-- `-o, --output <OUTPUT>` - Save results to JSON file
-- `-H, --header <HEADERS>` - Add custom headers
-- `-c, --checks <CHECKS>` - Specify checks to run (cl-te, te-cl, te-te, h2c, h2)
-- `--vhost <VHOST>` - Set virtual host in Host header
-- `--cookies` - Fetch and include cookies
-- `--export-payloads <DIR>` - Export vulnerable payloads to directory
-- `-1, --exit-first` - Exit after finding first vulnerability
-
-### Attack Types
-
-The tool tests for these attack types:
-
-- CL.TE - Content-Length vs Transfer-Encoding desync
-- TE.CL - Transfer-Encoding vs Content-Length desync
-- TE.TE - Transfer-Encoding obfuscation with 40+ variations
-- H2C - HTTP/2 Cleartext smuggling with 20+ payloads
-- H2 - HTTP/2 protocol-level smuggling with 25+ payloads
+Attack types: CL.TE, TE.CL, TE.TE, H2C, H2
 
 ## Examples
 
-### Scan with Verbose Output
-
 ```bash
-smugglex https://target.com -v
+smugglex https://target.com -v -o results.json
+cat urls.txt | smugglex --exit-first
 ```
 
-### Export Vulnerable Payloads
-
-```bash
-smugglex https://target.com --export-payloads ./payloads
-```
-
-### Test Specific Attack Types
-
-```bash
-smugglex https://target.com -c cl-te,te-cl
-```
-
-### Scan with Custom Headers and Timeout
-
-```bash
-smugglex https://target.com -H "X-Custom: value" -t 20 -v
-```
-
-### Pipeline Integration
-
-```bash
-echo "https://target1.com" | smugglex -v
-cat targets.txt | smugglex -o results.json
-```
+For more examples, see [Examples](https://smugglex.hahwul.com/examples).
 
 ## Troubleshooting
 
-### Command Not Found
-
-If you get a command not found error, ensure `~/.cargo/bin` is in your PATH:
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-Add this line to your shell configuration file (~/.bashrc or ~/.zshrc) to make it permanent.
-
-### Build Errors
-
-Update Rust to the latest version:
-
-```bash
-rustup update
-```
-
-On some systems, you may need OpenSSL development libraries:
-
-```bash
-# Ubuntu/Debian
-sudo apt-get install libssl-dev pkg-config
-
-# macOS
-brew install openssl pkg-config
-```
-
-### Connection Issues
-
-If you experience connection timeouts:
-
-- Increase the timeout value with `-t 30`
-- Check network connectivity to the target
-- Verify the target URL is accessible
-- Check if a firewall is blocking connections
+Common issues and solutions are available in the [Troubleshooting Guide](https://smugglex.hahwul.com/troubleshooting).
 
 ## References
 
-- Documentation Site: [https://smugglex.hahwul.com](https://smugglex.hahwul.com)
-- GitHub Repository: [https://github.com/hahwul/smugglex](https://github.com/hahwul/smugglex)
-- Issue Tracker: [https://github.com/hahwul/smugglex/issues](https://github.com/hahwul/smugglex/issues)
-- HTTP Request Smuggling: [PortSwigger Research](https://portswigger.net/web-security/request-smuggling)
-
-## Security Warning
-
-This tool is for authorized security testing only. Use smugglex only on:
-
-- Systems you own
-- Systems with explicit written permission
-- Authorized penetration testing engagements
-- Educational purposes in controlled environments
-
-Unauthorized testing may be illegal in your jurisdiction.
-
-## License
-
-MIT
+- [Documentation](https://smugglex.hahwul.com)
+- [GitHub Repository](https://github.com/hahwul/smugglex)
+- [HTTP Request Smuggling Research](https://portswigger.net/web-security/request-smuggling)
