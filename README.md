@@ -32,27 +32,7 @@ HTTP Request Smuggling exploits differences in how front-end and back-end server
 - Read URLs from stdin for pipeline integration
 - Configure custom headers, cookies, and virtual hosts
 
-### Example Output
-
-```bash
-smugglex https://target.com/
-11:27PM INF start scan to https://target.com/
-11:29PM WRN smuggling found 2 vulnerability(ies)
-
-=== TE.CL Vulnerability Details ===
-Status: VULNERABLE
-Payload Index: 0
-Attack Response: Connection Timeout
-Timing: Normal: 1279ms, Attack: 10000ms
-
-=== TE.TE Vulnerability Details ===
-Status: VULNERABLE
-Payload Index: 11
-Attack Response: Connection Timeout
-Timing: Normal: 1263ms, Attack: 10000ms
-
-11:29PM INF scan completed in 141.099 seconds
-```
+![](docs/static/images/sample.jpg)
 
 ## Installation
 
