@@ -221,6 +221,70 @@ cat targets.txt | smugglex -o results.json --exit-first
 smugglex https://10.0.0.1/ --vhost internal.example.com -H "X-Forwarded-For: 127.0.0.1"
 ```
 
+## Exploitation Features
+
+### Localhost Access Exploit
+
+After detecting a smuggling vulnerability, you can automatically test for SSRF-like attacks targeting localhost services:
+
+```bash
+smugglex https://target.com/ --exploit localhost-access
+```
+
+This leverages the detected vulnerability to attempt accessing localhost (127.0.0.1) on common ports: 22, 80, 443, 8080, 3306.
+
+#### Custom Ports
+
+Test specific ports:
+
+```bash
+smugglex https://target.com/ --exploit localhost-access --ports 22,80,443
+```
+
+Test database services:
+
+```bash
+smugglex https://target.com/ --exploit localhost-access --ports 3306,5432,6379,27017
+```
+
+#### Exploit with Detection
+
+Combine with specific checks and exploitation:
+
+```bash
+# Only test CL.TE, then exploit if found
+smugglex https://target.com/ -c cl-te --exploit localhost-access --ports 80,443
+
+# Quick scan with exploitation
+smugglex https://target.com/ -1 --exploit localhost-access -v
+```
+
+#### Understanding Exploit Results
+
+When localhost access is successful, you'll see:
+
+```
+=== Localhost Access Exploit Results ===
+Target: https://target.com/
+Success Rate: 2/3
+
+[+] Localhost Access Successful on port 22
+  Reason: Found signature 'SSH-2.0' in response; Status code changed from 200 to 502
+  Response Status: HTTP/1.1 502 Bad Gateway
+
+[+] Localhost Access Successful on port 80
+  Reason: Found error keyword 'Connection refused' in response body
+  Response Status: HTTP/1.1 502 Bad Gateway
+```
+
+The exploit detects success based on:
+- Status code changes (200 → 502/503/504/403/421)
+- Service-specific signatures (SSH-2.0, Apache, nginx, etc.)
+- Error messages with localhost-related keywords
+- Significant timing differences
+
+⚠️ **Important**: Exploitation features are for authorized security testing only.
+
 ## Command-Line Reference
 
 ### All Options
@@ -237,6 +301,9 @@ smugglex https://10.0.0.1/ --vhost internal.example.com -H "X-Forwarded-For: 127
 | `--cookies` | | Fetch and include cookies | false |
 | `--export-payloads` | | Export vulnerable payloads | - |
 | `--exit-first` | `-1` | Exit after first vulnerability | false |
+| `--exploit` | `-e` | Exploit types (e.g., localhost-access) | - |
+| `--ports` | | Ports for localhost-access exploit | 22,80,443,8080,3306 |
+| `--format` | `-f` | Output format (plain or json) | plain |
 | `--help` | `-h` | Display help message | - |
 | `--version` | `-V` | Display version | - |
 
