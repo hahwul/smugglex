@@ -238,13 +238,13 @@ This leverages the detected vulnerability to attempt accessing localhost (127.0.
 Test specific ports:
 
 ```bash
-smugglex https://target.com/ --exploit localhost-access --ports 22,80,443
+smugglex https://target.com/ --exploit localhost-access --exploit-ports 22,80,443
 ```
 
 Test database services:
 
 ```bash
-smugglex https://target.com/ --exploit localhost-access --ports 3306,5432,6379,27017
+smugglex https://target.com/ --exploit localhost-access --exploit-ports 3306,5432,6379,27017
 ```
 
 #### Exploit with Detection
@@ -253,7 +253,7 @@ Combine with specific checks and exploitation:
 
 ```bash
 # Only test CL.TE, then exploit if found
-smugglex https://target.com/ -c cl-te --exploit localhost-access --ports 80,443
+smugglex https://target.com/ -c cl-te --exploit localhost-access --exploit-ports 80,443
 
 # Quick scan with exploitation
 smugglex https://target.com/ -1 --exploit localhost-access -v
@@ -302,7 +302,7 @@ The exploit detects success based on:
 | `--export-payloads` | | Export vulnerable payloads | - |
 | `--exit-first` | `-1` | Exit after first vulnerability | false |
 | `--exploit` | `-e` | Exploit types (e.g., localhost-access) | - |
-| `--ports` | | Ports for localhost-access exploit | 22,80,443,8080,3306 |
+| `--exploit-ports` | | Ports for localhost-access exploit | 22,80,443,8080,3306 |
 | `--format` | `-f` | Output format (plain or json) | plain |
 | `--help` | `-h` | Display help message | - |
 | `--version` | `-V` | Display version | - |
