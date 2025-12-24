@@ -49,7 +49,7 @@ fn test_urls_with_options() {
         "GET",
         "-t",
         "20",
-        "-v",
+        "-V",
     ]);
     assert_eq!(cli.urls.len(), 2);
     assert_eq!(cli.urls[0], "http://example1.com");
@@ -273,7 +273,7 @@ fn test_all_options_combined() {
         "GET",
         "-t",
         "30",
-        "-v",
+        "-V",
         "-o",
         "output.json",
         "-H",
@@ -437,7 +437,12 @@ fn test_ports_option_default() {
 
 #[test]
 fn test_ports_option_custom() {
-    let cli = Cli::parse_from(&["smugglex", "http://example.com", "--exploit-ports", "80,443"]);
+    let cli = Cli::parse_from(&[
+        "smugglex",
+        "http://example.com",
+        "--exploit-ports",
+        "80,443",
+    ]);
     assert_eq!(cli.exploit_ports, "80,443");
 }
 
