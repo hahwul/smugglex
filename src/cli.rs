@@ -95,8 +95,8 @@ pub struct Cli {
     /// Ports to test for localhost access exploit (comma-separated)
     #[arg(
         help_heading = "EXPLOIT",
-        long = "ports",
+        long = "exploit-ports",
         default_value = "22,80,443,8080,3306"
     )]
-    pub ports: String,
+    pub exploit_ports: String,
 }

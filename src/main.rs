@@ -152,7 +152,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                 cli.timeout,
                 cli.verbose,
                 target_url,
-                &cli.ports,
+                &cli.exploit_ports,
             )
             .await?;
         } else {

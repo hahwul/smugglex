@@ -432,13 +432,13 @@ fn test_exploit_option_none() {
 #[test]
 fn test_ports_option_default() {
     let cli = Cli::parse_from(&["smugglex", "http://example.com"]);
-    assert_eq!(cli.ports, "22,80,443,8080,3306");
+    assert_eq!(cli.exploit_ports, "22,80,443,8080,3306");
 }
 
 #[test]
 fn test_ports_option_custom() {
-    let cli = Cli::parse_from(&["smugglex", "http://example.com", "--ports", "80,443"]);
-    assert_eq!(cli.ports, "80,443");
+    let cli = Cli::parse_from(&["smugglex", "http://example.com", "--exploit-ports", "80,443"]);
+    assert_eq!(cli.exploit_ports, "80,443");
 }
 
 #[test]
@@ -448,9 +448,9 @@ fn test_exploit_with_custom_ports() {
         "http://example.com",
         "--exploit",
         "localhost-access",
-        "--ports",
+        "--exploit-ports",
         "22,80,8080",
     ]);
     assert_eq!(cli.exploit, Some("localhost-access".to_string()));
-    assert_eq!(cli.ports, "22,80,8080");
+    assert_eq!(cli.exploit_ports, "22,80,8080");
 }
