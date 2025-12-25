@@ -71,7 +71,7 @@ sudo mv smugglex /usr/local/bin/
 
 Build from source to access the latest development version. This requires Rust 1.70 or later.
 
-For detailed build instructions and development setup, see the [Development Guide](/development/building).
+For detailed build instructions and development setup, see the [Contributing](/support/contributing) guide.
 
 Clone the repository:
 
@@ -110,93 +110,6 @@ Run a test on a system you own:
 
 ```bash
 smugglex https://your-test-system.com/ -v
-```
-
-## Usage
-
-### Basic Scan
-
-```bash
-smugglex https://example.com/
-```
-
-### Verbose Output
-
-```bash
-smugglex https://example.com/ -v
-```
-
-### Custom Timeout
-
-```bash
-smugglex https://example.com/ -t 15
-```
-
-### Save Results
-
-```bash
-smugglex https://example.com/ -o results.json
-```
-
-### Multiple URLs
-
-```bash
-cat urls.txt | smugglex
-```
-
-### Exit After First Vulnerability
-
-```bash
-smugglex https://example.com/ --exit-first
-```
-
-## Configuration
-
-### Command-Line Options
-
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--method` | `-m` | HTTP method (default: POST) |
-| `--timeout` | `-t` | Timeout in seconds (default: 10) |
-| `--verbose` | `-v` | Enable verbose output |
-| `--output` | `-o` | JSON output file |
-| `--header` | `-H` | Add custom headers |
-| `--checks` | `-c` | Specify checks (cl-te,te-cl,te-te,h2c,h2) |
-| `--vhost` | | Virtual host for Host header |
-| `--cookies` | | Fetch and include cookies |
-| `--export-payloads` | | Export vulnerable payloads |
-| `--exit-first` | `-1` | Exit after first vulnerability |
-| `--help` | `-h` | Display help |
-| `--version` | `-V` | Display version |
-
-### Custom Headers
-
-```bash
-smugglex https://example.com/ -H "Authorization: Bearer token123"
-```
-
-### Virtual Host Testing
-
-```bash
-smugglex https://192.168.1.100/ --vhost example.com
-```
-
-### Specific Attack Types
-
-```bash
-smugglex https://example.com/ -c cl-te,te-cl
-```
-
-### With Cookies
-
-```bash
-smugglex https://example.com/ --cookies
-```
-
-### Export Payloads
-
-```bash
-smugglex https://example.com/ --export-payloads ./payloads
 ```
 
 ## Troubleshooting
@@ -266,8 +179,7 @@ If you experience connection timeouts:
 
 ## References
 
-- [Running SmuggleX](/get_started/running) - Learn how to run smugglex
-- [Overview](/get_started/overview) - HTTP Request Smuggling overview
-- [Development](/development/building) - Building from source for development
+- [Quick Start](/getting-started/quick-start) - Run your first scan
+- [Usage](/usage) - Learn detailed usage options
 - [GitHub Repository](https://github.com/hahwul/smugglex)
 - [Issue Tracker](https://github.com/hahwul/smugglex/issues)

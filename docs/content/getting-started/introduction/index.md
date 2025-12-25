@@ -1,5 +1,5 @@
 +++
-title = "Overview"
+title = "Introduction"
 description = "Learn about smugglex and HTTP Request Smuggling vulnerabilities"
 weight = 1
 sort_by = "weight"
@@ -124,18 +124,12 @@ Integrate with other security testing tools through stdin pipeline support. Smug
 
 ## Ethical Use
 
-This tool is for authorized security testing only. Use smugglex only on:
-
-- Systems you own
-- Systems with explicit written permission
-- Authorized penetration testing engagements
-- Educational purposes in controlled environments
+This tool is for authorized security testing only. Use smugglex only on systems you own, systems with explicit written permission, authorized penetration testing engagements, or educational purposes in controlled environments.
 
 Unauthorized testing may be illegal in your jurisdiction. Always obtain proper authorization before testing.
 
 ## Next Steps
 
-- Install smugglex by following the [Installation](/get_started/installation) guide
-- Learn how to run scans with [Running SmuggleX](/get_started/running)
-- Understand HTTP Request Smuggling in depth at [Resources](/resources/http-smuggling)
-- Explore development options in [Development](/development)
+- Install smugglex by following the [Installation](/getting-started/installation) guide
+- Learn how to run scans with [Quick Start](/getting-started/quick-start)
+- Explore [Usage](/usage) for detailed configuration options

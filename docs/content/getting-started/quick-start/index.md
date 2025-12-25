@@ -1,39 +1,43 @@
 +++
-title = "Getting Started"
-description = "This section provides everything you need to get started with smugglex, from installation to your first scan."
-weight = 1
+title = "Quick Start"
+description = "Run your first scan with smugglex"
+weight = 3
 sort_by = "weight"
 
 [extra]
 +++
 
-This section guides you through using smugglex to test for HTTP Request Smuggling vulnerabilities.
+This guide helps you run your first scan with smugglex.
 
-## What You Will Learn
-
-- [Overview](/get_started/overview) - Learn about HTTP Request Smuggling and smugglex
-- [Installation](/get_started/installation) - Install smugglex on your system
-- [Running SmuggleX](/get_started/running) - Learn how to run smugglex and configure scans
-
-## Quick Start
-
-### Install
+## Install
 
 ```bash
 cargo install smugglex
 ```
 
-### Run First Scan
+For other installation methods, see the [Installation](/getting-started/installation) guide.
+
+## Run First Scan
 
 ```bash
 smugglex https://example.com/
 ```
 
-### Review Results
+Replace `https://example.com/` with a URL you have permission to test.
+
+## Review Results
 
 Smugglex tests for all major HTTP Request Smuggling attack types and reports vulnerabilities.
 
-For more detailed usage examples, see [Running SmuggleX](/get_started/running).
+Example output:
+
+```
+=== TE.CL Vulnerability Details ===
+Status: VULNERABLE
+Payload Index: 0
+Attack Response: Connection Timeout
+Timing: Normal: 1279ms, Attack: 10000ms
+```
 
 ## Key Concepts
 
@@ -66,17 +70,12 @@ To use smugglex, you need:
 
 ## Security Notice
 
-This tool is for authorized security testing only. Use smugglex only on:
-
-- Systems you own
-- Systems with explicit written permission
-- Authorized penetration testing engagements
-- Educational purposes in controlled environments
+This tool is for authorized security testing only. Use smugglex only on systems you own, systems with explicit written permission, authorized penetration testing engagements, or educational purposes in controlled environments.
 
 Unauthorized testing may be illegal.
 
-## References
+## Next Steps
 
-- [GitHub Repository](https://github.com/hahwul/smugglex)
-- [Issue Tracker](https://github.com/hahwul/smugglex/issues)
-- Command-line help: `smugglex --help`
+- Explore [Usage](/usage) for detailed configuration options
+- Learn about [Exploiting](/advanced/exploiting) vulnerabilities
+- Understand [Performance Tips](/advanced/performance-tips) for efficient scanning

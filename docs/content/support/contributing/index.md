@@ -1,24 +1,17 @@
 +++
-title = "Development"
-description = "Development guide for smugglex contributors"
-weight = 2
+title = "Contributing"
+description = "Contribute to smugglex development"
+weight = 4
 sort_by = "weight"
 
 [extra]
 +++
 
-This section provides information for developers who want to contribute to smugglex or build it from source.
+This guide provides information for developers who want to contribute to smugglex.
 
 ## Overview
 
 Smugglex is written in Rust and uses modern async/await patterns with Tokio. The codebase is organized into modular components for maintainability and testability.
-
-## Quick Links
-
-- [Building](/development/building) - Build smugglex from source
-- [GitHub Repository](https://github.com/hahwul/smugglex)
-- [Issue Tracker](https://github.com/hahwul/smugglex/issues)
-- [Contributing Guidelines](https://github.com/hahwul/smugglex/blob/main/CONTRIBUTING.md)
 
 ## Getting Started
 
@@ -173,9 +166,91 @@ When reporting bugs, include:
 - Expected vs actual behavior
 - Relevant logs or error messages
 
+## Build Instructions
+
+### Development Build
+
+Build in debug mode (faster compilation, slower execution):
+
+```bash
+cargo build
+```
+
+The binary is located at `./target/debug/smugglex`.
+
+### Release Build
+
+Build in release mode (optimized for performance):
+
+```bash
+cargo build --release
+```
+
+The binary is located at `./target/release/smugglex`.
+
+### Install Locally
+
+Install the binary to `~/.cargo/bin/`:
+
+```bash
+cargo install --path .
+```
+
+## Development Tasks
+
+### Format Code
+
+Format code according to Rust style guidelines:
+
+```bash
+cargo fmt
+```
+
+### Lint Code
+
+Run Clippy to catch common mistakes:
+
+```bash
+cargo clippy
+```
+
+Treat warnings as errors:
+
+```bash
+cargo clippy -- -D warnings
+```
+
+### Run Tests
+
+Run all tests:
+
+```bash
+cargo test
+```
+
+Run specific test:
+
+```bash
+cargo test test_name
+```
+
+Run tests with output:
+
+```bash
+cargo test -- --nocapture
+```
+
+### Build Documentation
+
+Generate and view documentation:
+
+```bash
+cargo doc --open
+```
+
 ## Resources
 
-- [Building from Source](/development/building)
+- [GitHub Repository](https://github.com/hahwul/smugglex)
+- [Issue Tracker](https://github.com/hahwul/smugglex/issues)
 - [Rust Documentation](https://doc.rust-lang.org/)
 - [Tokio Documentation](https://tokio.rs/)
-- [HTTP Request Smuggling Resources](/resources)
