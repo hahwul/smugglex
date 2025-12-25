@@ -5,6 +5,7 @@ weight = 2
 sort_by = "weight"
 
 [extra]
+toc_expand = true
 +++
 
 ## Installation Methods
