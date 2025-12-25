@@ -9,30 +9,71 @@ sort_by = "weight"
 
 Common issues and solutions for smugglex.
 
-## Overview
+## Installation Issues
 
-This page will provide troubleshooting guidance for common issues. Documentation is being developed.
+### Command Not Found
 
-## Common Issues
+Check if the binary is in your PATH:
 
-Check the following resources for help:
+```bash
+which smugglex
+```
 
-- [Installation](/getting-started/installation) - Installation troubleshooting
-- [Options and Flags](/usage/options-and-flags) - Configuration help
-- [GitHub Issues](https://github.com/hahwul/smugglex/issues) - Known issues
+**Solution for Homebrew:**
+```bash
+export PATH="/usr/local/bin:$PATH"
+```
+
+**Solution for Cargo:**
+
+Ensure `~/.cargo/bin` is in your PATH:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Add to `~/.bashrc` or `~/.zshrc` for permanent use.
+
+### Build Errors
+
+Update Rust to the latest version:
+
+```bash
+rustup update
+```
+
+**Install dependencies:**
+
+Ubuntu/Debian:
+```bash
+sudo apt-get install libssl-dev pkg-config
+```
+
+macOS:
+```bash
+brew install openssl pkg-config
+```
+
+## Runtime Issues
+
+### Connection Timeouts
+
+If you experience connection timeouts:
+
+- Check network connectivity
+- Increase timeout: `smugglex https://target.com/ -t 30`
+- Verify target URL is accessible
+- Check firewall settings
+
+### No Output
+
+Use verbose mode to see detailed information:
+
+```bash
+smugglex https://target.com/ -v
+```
 
 ## Getting Help
 
-If you encounter issues:
-
-1. Check that smugglex is properly installed: `smugglex --version`
-2. Review command-line options: `smugglex --help`
-3. Try verbose mode for more details: `smugglex -v`
-4. Search existing GitHub issues
-5. Open a new issue with details
-
-## References
-
-- [FAQ](/support/faq) - Frequently asked questions
-- [GitHub Repository](https://github.com/hahwul/smugglex)
-- [Issue Tracker](https://github.com/hahwul/smugglex/issues)
+- [GitHub Issues](https://github.com/hahwul/smugglex/issues)
+- [FAQ](/support/faq)

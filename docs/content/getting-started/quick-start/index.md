@@ -7,15 +7,7 @@ sort_by = "weight"
 [extra]
 +++
 
-This guide helps you run your first scan with smugglex.
-
-## Install
-
-```bash
-cargo install smugglex
-```
-
-For other installation methods, see the [Installation](/getting-started/installation) guide.
+Get started with smugglex in minutes.
 
 ## Run First Scan
 
@@ -25,11 +17,9 @@ smugglex https://example.com/
 
 Replace `https://example.com/` with a URL you have permission to test.
 
-## Review Results
+## Understand Results
 
-Smugglex tests for all major HTTP Request Smuggling attack types and reports vulnerabilities.
-
-Example output:
+Example output when a vulnerability is found:
 
 ```
 === TE.CL Vulnerability Details ===
@@ -39,43 +29,28 @@ Attack Response: Connection Timeout
 Timing: Normal: 1279ms, Attack: 10000ms
 ```
 
-## Key Concepts
+## Common Options
 
-### HTTP Request Smuggling
+```bash
+# Verbose output
+smugglex https://example.com/ -v
 
-HTTP Request Smuggling exploits differences in how servers parse requests. When servers disagree on request boundaries, attackers can smuggle malicious requests through security controls.
+# Quick scan (exit on first vulnerability)
+smugglex https://example.com/ -1
 
-### Attack Types
+# Save results to JSON
+smugglex https://example.com/ -o results.json
 
-Smugglex tests for these attack types:
-
-- CL.TE - Content-Length vs Transfer-Encoding desync
-- TE.CL - Transfer-Encoding vs Content-Length desync
-- TE.TE - Transfer-Encoding obfuscation (40+ variations)
-- H2C - HTTP/2 Cleartext smuggling (20+ payloads)
-- H2 - HTTP/2 protocol-level smuggling (25+ payloads)
-
-### Timing-Based Detection
-
-Smugglex uses timing analysis to detect vulnerabilities. The tool compares response times between normal and attack requests to identify desynchronization.
-
-## Prerequisites
-
-To use smugglex, you need:
-
-- Basic understanding of HTTP protocol
-- Knowledge of web application security
-- Authorization to test target systems
-- Command-line tool experience
+# Test specific attack types
+smugglex https://example.com/ -c cl-te,te-cl
+```
 
 ## Security Notice
 
-This tool is for authorized security testing only. Use smugglex only on systems you own, systems with explicit written permission, authorized penetration testing engagements, or educational purposes in controlled environments.
-
-Unauthorized testing may be illegal.
+⚠️ Only test systems you own or have explicit written permission to test. Unauthorized testing may be illegal.
 
 ## Next Steps
 
-- Explore [Usage](/usage) for detailed configuration options
-- Learn about [Exploiting](/advanced/exploiting) vulnerabilities
-- Understand [Performance Tips](/advanced/performance-tips) for efficient scanning
+- [Options & Flags](/usage/options-and-flags) - All command-line options
+- [Examples](/usage/examples) - More usage examples
+- [Exploiting](/advanced/exploiting) - Exploitation techniques
