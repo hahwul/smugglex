@@ -74,3 +74,7 @@ Common issues and solutions are available in the [Troubleshooting Guide](https:/
 - [Documentation](https://smugglex.hahwul.com)
 - [GitHub Repository](https://github.com/hahwul/smugglex)
 - [HTTP Request Smuggling Research](https://portswigger.net/web-security/request-smuggling)
+
+-----
+
+![](docs/static/images/CONTRIBUTORS.svg)
