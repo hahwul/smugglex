@@ -459,3 +459,51 @@ fn test_exploit_with_custom_ports() {
     assert_eq!(cli.exploit, Some("localhost-access".to_string()));
     assert_eq!(cli.exploit_ports, "22,80,8080");
 }
+
+#[test]
+fn test_exploit_path_fuzz() {
+    let cli = Cli::parse_from(&["smugglex", "http://example.com", "--exploit", "path-fuzz"]);
+    assert_eq!(cli.exploit, Some("path-fuzz".to_string()));
+}
+
+#[test]
+fn test_exploit_multiple_types() {
+    let cli = Cli::parse_from(&[
+        "smugglex",
+        "http://example.com",
+        "--exploit",
+        "localhost-access,path-fuzz",
+    ]);
+    assert_eq!(cli.exploit, Some("localhost-access,path-fuzz".to_string()));
+}
+
+#[test]
+fn test_exploit_wordlist_option() {
+    let cli = Cli::parse_from(&[
+        "smugglex",
+        "http://example.com",
+        "--exploit-wordlist",
+        "/path/to/wordlist.txt",
+    ]);
+    assert_eq!(cli.exploit_wordlist, Some("/path/to/wordlist.txt".to_string()));
+}
+
+#[test]
+fn test_exploit_wordlist_default_none() {
+    let cli = Cli::parse_from(&["smugglex", "http://example.com"]);
+    assert_eq!(cli.exploit_wordlist, None);
+}
+
+#[test]
+fn test_exploit_path_fuzz_with_wordlist() {
+    let cli = Cli::parse_from(&[
+        "smugglex",
+        "http://example.com",
+        "--exploit",
+        "path-fuzz",
+        "--exploit-wordlist",
+        "/custom/wordlist.txt",
+    ]);
+    assert_eq!(cli.exploit, Some("path-fuzz".to_string()));
+    assert_eq!(cli.exploit_wordlist, Some("/custom/wordlist.txt".to_string()));
+}

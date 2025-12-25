@@ -9,7 +9,10 @@ use url::Url;
 
 use smugglex::cli::{Cli, OutputFormat};
 use smugglex::error::Result;
-use smugglex::exploit::{extract_vulnerability_context, print_localhost_results, test_localhost_access};
+use smugglex::exploit::{
+    extract_vulnerability_context, get_fuzz_paths, print_localhost_results, print_path_fuzz_results,
+    test_localhost_access, test_path_fuzz,
+};
 use smugglex::model::{CheckResult, ScanResults};
 use smugglex::payloads::{
     get_cl_te_payloads, get_h2_payloads, get_h2c_payloads, get_te_cl_payloads, get_te_te_payloads,
@@ -153,6 +156,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                 cli.verbose,
                 target_url,
                 &cli.exploit_ports,
+                cli.exploit_wordlist.as_deref(),
             )
             .await?;
         } else {
@@ -265,6 +269,7 @@ async fn run_exploits(
     verbose: bool,
     target_url: &str,
     ports_str: &str,
+    wordlist_path: Option<&str>,
 ) -> Result<()> {
     let exploits: Vec<&str> = exploit_str.split(',').map(|s| s.trim()).collect();
 
@@ -336,6 +341,74 @@ async fn run_exploits(
                         log(
                             LogLevel::Error,
                             &format!("localhost-access exploit failed: {}", e),
+                        );
+                    }
+                }
+            }
+            "path-fuzz" => {
+                log(LogLevel::Info, "running path-fuzz exploit");
+
+                // Extract vulnerability context from results
+                let vuln_ctx = match extract_vulnerability_context(results) {
+                    Some(ctx) => ctx,
+                    None => {
+                        log(
+                            LogLevel::Error,
+                            "cannot extract vulnerability context for exploitation",
+                        );
+                        continue;
+                    }
+                };
+
+                if verbose {
+                    println!(
+                        "\n{} Using detected {} vulnerability for exploitation",
+                        "[*]".cyan(),
+                        vuln_ctx.vuln_type.yellow().bold()
+                    );
+                }
+
+                // Get paths to fuzz
+                let fuzz_paths = match get_fuzz_paths(wordlist_path) {
+                    Ok(paths) => paths,
+                    Err(e) => {
+                        log(
+                            LogLevel::Error,
+                            &format!("failed to get fuzz paths: {}", e),
+                        );
+                        continue;
+                    }
+                };
+
+                if verbose {
+                    println!(
+                        "  {} Testing {} paths{}",
+                        "[*]".cyan(),
+                        fuzz_paths.len(),
+                        wordlist_path.map_or("".to_string(), |p| format!(" from {}", p))
+                    );
+                }
+
+                // Run path fuzz test
+                match test_path_fuzz(
+                    host,
+                    port,
+                    path,
+                    use_tls,
+                    timeout,
+                    verbose,
+                    &vuln_ctx,
+                    &fuzz_paths,
+                )
+                .await
+                {
+                    Ok(path_fuzz_results) => {
+                        print_path_fuzz_results(&path_fuzz_results, target_url);
+                    }
+                    Err(e) => {
+                        log(
+                            LogLevel::Error,
+                            &format!("path-fuzz exploit failed: {}", e),
                         );
                     }
                 }

@@ -88,7 +88,7 @@ pub struct Cli {
     #[arg(help_heading = "DETECT", short = '1', long = "exit-first", action = clap::ArgAction::SetTrue)]
     pub exit_first: bool,
 
-    /// Exploit types to run after detection (comma-separated: localhost-access)
+    /// Exploit types to run after detection (comma-separated: localhost-access,path-fuzz)
     #[arg(help_heading = "EXPLOIT", short = 'e', long = "exploit")]
     pub exploit: Option<String>,
 
@@ -99,4 +99,8 @@ pub struct Cli {
         default_value = "22,80,443,8080,3306"
     )]
     pub exploit_ports: String,
+
+    /// Wordlist file for path-fuzz exploit (one path per line)
+    #[arg(help_heading = "EXPLOIT", long = "exploit-wordlist")]
+    pub exploit_wordlist: Option<String>,
 }
