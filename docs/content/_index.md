@@ -7,7 +7,7 @@ badge = "v0.1.0"
 description = "Open-source HTTP Request Smuggling testing tool written in Rust. Detect CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling vulnerabilities in web applications."
 image = "/images/preview.jpg" # Background image
 cta_buttons = [
-    { text = "Get Started", url = "/get_started/installation", style = "primary" },
+    { text = "Get Started", url = "/getting-started/installation", style = "primary" },
     { text = "View on GitHub", url = "https://github.com/hahwul/smugglex", style = "secondary" },
 ]
 
