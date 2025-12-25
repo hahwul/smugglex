@@ -4,7 +4,7 @@
       <source media="(prefers-color-scheme: light)" srcset="docs/static/images/smugglex-light.png" width="500px;">
       <img alt="SmuggleX Logo" src="docs/static/images/smugglex-dark.png" width="500px;">
     </picture>
-    <p>Rust-powered HTTP Smuggling Scanner.</p>
+    <p>Rust-powered HTTP Request Smuggling Scanner.</p>
 </div>
 
 <p align="center">

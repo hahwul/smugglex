@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-smugglex is Rust-powered HTTP Smuggling Scanner. It's designed for security testing and penetration testing to detect various types of HTTP request smuggling vulnerabilities.
+smugglex is Rust-powered HTTP Request Smuggling Scanner. It's designed for security testing and penetration testing to detect various types of HTTP request smuggling vulnerabilities.
 
 ### Purpose
 - Identify HTTP request smuggling vulnerabilities in web applications and proxies

@@ -1,6 +1,6 @@
 ---
 name: smugglex
-summary: Rust-powered HTTP Smuggling Scanner.
+summary: Rust-powered HTTP Request Smuggling Scanner.
 description: |
   Smugglex is a security testing tool that detects HTTP Request Smuggling vulnerabilities in web applications. The tool tests for multiple attack types including CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling.
 
