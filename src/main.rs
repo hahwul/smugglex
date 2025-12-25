@@ -296,7 +296,7 @@ async fn run_exploits(
                 // Parse target ports
                 let localhost_ports: Vec<u16> = ports_str
                     .split(',')
-                    .filter_map(|s| s.trim().parse().ok())
+                    .filter_map(|s| s.trim().parse::<u16>().ok())
                     .collect();
 
                 if localhost_ports.is_empty() {
