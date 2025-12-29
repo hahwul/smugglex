@@ -25,7 +25,7 @@ pub fn convert_to_sarif(scan_results: &ScanResults) -> Sarif {
 fn create_tool_component() -> Tool {
     let driver = ToolComponent::builder()
         .name("SmuggleX")
-        .semantic_version(env!("CARGO_PKG_VERSION"))
+        .semantic_version(option_env!("CARGO_PKG_VERSION").unwrap_or("unknown"))
         .information_uri("https://github.com/hahwul/smugglex")
         .rules(create_rules())
         .build();
@@ -36,11 +36,6 @@ fn create_tool_component() -> Tool {
 /// Create rules for each vulnerability type
 fn create_rules() -> Vec<ReportingDescriptor> {
     vec![
-        create_rule("CL.TE", "Content-Length vs Transfer-Encoding Smuggling"),
-        create_rule("TE.CL", "Transfer-Encoding vs Content-Length Smuggling"),
-        create_rule("TE.TE", "Transfer-Encoding Obfuscation Smuggling"),
-        create_rule("H2C", "HTTP/2 Cleartext Smuggling"),
-        create_rule("H2", "HTTP/2 Protocol Smuggling"),
         create_rule("cl-te", "Content-Length vs Transfer-Encoding Smuggling"),
         create_rule("te-cl", "Transfer-Encoding vs Content-Length Smuggling"),
         create_rule("te-te", "Transfer-Encoding Obfuscation Smuggling"),
@@ -199,7 +194,7 @@ mod tests {
     #[test]
     fn test_convert_to_sarif_basic() {
         let checks = vec![create_test_check_result(
-            "CL.TE",
+            "cl-te",
             true,
             Some(0),
             Some("HTTP/1.1 504 Gateway Timeout"),
@@ -224,13 +219,13 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let result = &results[0];
-        assert_eq!(result.rule_id.as_deref(), Some("CL.TE"));
+        assert_eq!(result.rule_id.as_deref(), Some("cl-te"));
         assert_eq!(result.level, Some(ResultLevel::Error));
     }
 
     #[test]
     fn test_convert_to_sarif_no_vulnerabilities() {
-        let checks = vec![create_test_check_result("TE.CL", false, None, None, None)];
+        let checks = vec![create_test_check_result("te-cl", false, None, None, None)];
 
         let scan_results = ScanResults {
             target: "https://example.com".to_string(),
@@ -253,15 +248,15 @@ mod tests {
     fn test_convert_to_sarif_multiple_vulnerabilities() {
         let checks = vec![
             create_test_check_result(
-                "CL.TE",
+                "cl-te",
                 true,
                 Some(0),
                 Some("HTTP/1.1 504 Gateway Timeout"),
                 Some(5000),
             ),
-            create_test_check_result("TE.CL", false, None, None, None),
+            create_test_check_result("te-cl", false, None, None, None),
             create_test_check_result(
-                "TE.TE",
+                "te-te",
                 true,
                 Some(2),
                 Some("Connection Timeout"),
@@ -284,19 +279,19 @@ mod tests {
             .as_ref()
             .expect("Results should be present");
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].rule_id.as_deref(), Some("CL.TE"));
-        assert_eq!(results[1].rule_id.as_deref(), Some("TE.TE"));
+        assert_eq!(results[0].rule_id.as_deref(), Some("cl-te"));
+        assert_eq!(results[1].rule_id.as_deref(), Some("te-te"));
     }
 
     #[test]
     fn test_create_rules() {
         let rules = create_rules();
 
-        // Should have rules for all vulnerability types (both uppercase and lowercase)
-        assert_eq!(rules.len(), 10);
+        // Should have rules for all vulnerability types
+        assert_eq!(rules.len(), 5);
 
-        // Check that CL.TE rule exists
-        let cl_te_rule = rules.iter().find(|r| r.id == "CL.TE");
+        // Check that cl-te rule exists
+        let cl_te_rule = rules.iter().find(|r| r.id == "cl-te");
         assert!(cl_te_rule.is_some());
 
         let rule = cl_te_rule.unwrap();
@@ -306,9 +301,9 @@ mod tests {
 
     #[test]
     fn test_create_rule() {
-        let rule = create_rule("CL.TE", "Test Rule");
+        let rule = create_rule("cl-te", "Test Rule");
 
-        assert_eq!(rule.id, "CL.TE");
+        assert_eq!(rule.id, "cl-te");
         assert_eq!(rule.name.as_deref(), Some("Test Rule"));
         assert!(rule.short_description.is_some());
         assert!(rule.full_description.is_some());
@@ -318,7 +313,7 @@ mod tests {
     #[test]
     fn test_sarif_serialization() {
         let checks = vec![create_test_check_result(
-            "CL.TE",
+            "cl-te",
             true,
             Some(0),
             Some("HTTP/1.1 504 Gateway Timeout"),

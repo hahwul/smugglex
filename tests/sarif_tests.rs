@@ -34,7 +34,7 @@ fn create_test_check_result(
 #[test]
 fn test_sarif_format_with_single_vulnerability() {
     let checks = vec![create_test_check_result(
-        "CL.TE",
+        "cl-te",
         true,
         Some(0),
         Some("HTTP/1.1 504 Gateway Timeout"),
@@ -69,13 +69,13 @@ fn test_sarif_format_with_single_vulnerability() {
     assert_eq!(results.len(), 1);
 
     let result = &results[0];
-    assert_eq!(result.rule_id.as_deref(), Some("CL.TE"));
+    assert_eq!(result.rule_id.as_deref(), Some("cl-te"));
     let message_text = result
         .message
         .text
         .as_deref()
         .expect("Message text should be present");
-    assert!(message_text.contains("CL.TE"));
+    assert!(message_text.contains("cl-te"));
     assert!(result.locations.is_some());
     assert!(result.locations.as_ref().unwrap().len() > 0);
 }
@@ -83,8 +83,8 @@ fn test_sarif_format_with_single_vulnerability() {
 #[test]
 fn test_sarif_format_with_no_vulnerabilities() {
     let checks = vec![
-        create_test_check_result("CL.TE", false, None, None, None, None),
-        create_test_check_result("TE.CL", false, None, None, None, None),
+        create_test_check_result("cl-te", false, None, None, None, None),
+        create_test_check_result("te-cl", false, None, None, None, None),
     ];
 
     let scan_results = ScanResults {
@@ -105,16 +105,16 @@ fn test_sarif_format_with_no_vulnerabilities() {
 fn test_sarif_format_with_multiple_vulnerabilities() {
     let checks = vec![
         create_test_check_result(
-            "CL.TE",
+            "cl-te",
             true,
             Some(0),
             Some("HTTP/1.1 504 Gateway Timeout"),
             Some(5000),
             None,
         ),
-        create_test_check_result("TE.CL", false, None, None, None, None),
+        create_test_check_result("te-cl", false, None, None, None, None),
         create_test_check_result(
-            "TE.TE",
+            "te-te",
             true,
             Some(2),
             Some("Connection Timeout"),
@@ -122,7 +122,7 @@ fn test_sarif_format_with_multiple_vulnerabilities() {
             None,
         ),
         create_test_check_result(
-            "H2C",
+            "h2c",
             true,
             Some(1),
             Some("HTTP/1.1 408 Request Timeout"),
@@ -148,15 +148,15 @@ fn test_sarif_format_with_multiple_vulnerabilities() {
     assert_eq!(results.len(), 3);
 
     // Verify rule IDs
-    assert_eq!(results[0].rule_id.as_deref(), Some("CL.TE"));
-    assert_eq!(results[1].rule_id.as_deref(), Some("TE.TE"));
-    assert_eq!(results[2].rule_id.as_deref(), Some("H2C"));
+    assert_eq!(results[0].rule_id.as_deref(), Some("cl-te"));
+    assert_eq!(results[1].rule_id.as_deref(), Some("te-te"));
+    assert_eq!(results[2].rule_id.as_deref(), Some("h2c"));
 }
 
 #[test]
 fn test_sarif_serialization() {
     let checks = vec![create_test_check_result(
-        "CL.TE",
+        "cl-te",
         true,
         Some(0),
         Some("HTTP/1.1 504 Gateway Timeout"),
@@ -188,7 +188,7 @@ fn test_sarif_serialization() {
 #[test]
 fn test_sarif_contains_rules() {
     let checks = vec![create_test_check_result(
-        "CL.TE",
+        "cl-te",
         true,
         Some(0),
         Some("HTTP/1.1 504 Gateway Timeout"),
@@ -213,8 +213,8 @@ fn test_sarif_contains_rules() {
     // Should have rules for all check types
     assert!(rules.len() >= 5);
 
-    // Verify CL.TE rule exists
-    let cl_te_rule = rules.iter().find(|r| r.id == "CL.TE");
+    // Verify cl-te rule exists
+    let cl_te_rule = rules.iter().find(|r| r.id == "cl-te");
     assert!(cl_te_rule.is_some());
 
     let rule = cl_te_rule.unwrap();
@@ -228,7 +228,7 @@ fn test_sarif_contains_rules() {
 fn test_sarif_with_payload_included() {
     let payload = "POST / HTTP/1.1\r\nHost: test.com\r\nContent-Length: 0\r\n\r\n";
     let checks = vec![create_test_check_result(
-        "TE.CL",
+        "te-cl",
         true,
         Some(1),
         Some("Connection Timeout"),
@@ -262,7 +262,7 @@ fn test_sarif_with_payload_included() {
 #[test]
 fn test_sarif_locations() {
     let checks = vec![create_test_check_result(
-        "H2",
+        "h2",
         true,
         Some(0),
         Some("HTTP/1.1 504 Gateway Timeout"),
@@ -303,7 +303,7 @@ fn test_sarif_locations() {
 #[test]
 fn test_sarif_artifacts() {
     let checks = vec![create_test_check_result(
-        "CL.TE",
+        "cl-te",
         true,
         Some(0),
         Some("HTTP/1.1 504 Gateway Timeout"),
@@ -336,7 +336,7 @@ fn test_sarif_artifacts() {
 
 #[test]
 fn test_sarif_all_check_types() {
-    let check_types = vec!["CL.TE", "TE.CL", "TE.TE", "H2C", "H2"];
+    let check_types = vec!["cl-te", "te-cl", "te-te", "h2c", "h2"];
 
     for check_type in check_types {
         let checks = vec![create_test_check_result(
