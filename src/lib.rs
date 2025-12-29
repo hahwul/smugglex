@@ -4,5 +4,6 @@ pub mod exploit;
 pub mod http;
 pub mod model;
 pub mod payloads;
+pub mod sarif;
 pub mod scanner;
 pub mod utils;

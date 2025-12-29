@@ -8,6 +8,8 @@ pub enum OutputFormat {
     Plain,
     /// JSON output (structured)
     Json,
+    /// SARIF output (Static Analysis Results Interchange Format)
+    Sarif,
 }
 
 impl fmt::Display for OutputFormat {
@@ -15,6 +17,7 @@ impl fmt::Display for OutputFormat {
         match self {
             OutputFormat::Plain => write!(f, "plain"),
             OutputFormat::Json => write!(f, "json"),
+            OutputFormat::Sarif => write!(f, "sarif"),
         }
     }
 }
@@ -23,6 +26,11 @@ impl OutputFormat {
     /// Check if format is JSON
     pub fn is_json(&self) -> bool {
         matches!(self, OutputFormat::Json)
+    }
+
+    /// Check if format is SARIF
+    pub fn is_sarif(&self) -> bool {
+        matches!(self, OutputFormat::Sarif)
     }
 }
 
@@ -64,11 +72,11 @@ pub struct Cli {
     #[arg(help_heading = "REQUEST", long = "cookies", action = clap::ArgAction::SetTrue)]
     pub use_cookies: bool,
 
-    /// Output file for results (JSON format)
+    /// Output file for results (JSON or SARIF format)
     #[arg(help_heading = "OUTPUT", short, long)]
     pub output: Option<String>,
 
-    /// Output format (plain or json)
+    /// Output format (plain, json, or sarif)
     #[arg(help_heading = "OUTPUT", short = 'f', long = "format", default_value_t = OutputFormat::Plain)]
     pub format: OutputFormat,
 

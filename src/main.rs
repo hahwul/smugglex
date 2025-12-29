@@ -17,6 +17,7 @@ use smugglex::model::{CheckResult, ScanResults};
 use smugglex::payloads::{
     get_cl_te_payloads, get_h2_payloads, get_h2c_payloads, get_te_cl_payloads, get_te_te_payloads,
 };
+use smugglex::sarif::convert_to_sarif;
 use smugglex::scanner::{CheckParams, run_checks_for_type};
 use smugglex::utils::{LogLevel, fetch_cookies, log};
 
@@ -237,6 +238,25 @@ fn log_scan_results(
                 log(
                     LogLevel::Error,
                     &format!("failed to serialize results to JSON: {}", e),
+                );
+                log(LogLevel::Info, "falling back to plain text output");
+                log_plain_results(results, vulnerable_count);
+            }
+        }
+    } else if format.is_sarif() {
+        let scan_results = ScanResults {
+            target: target_url.to_string(),
+            method: method.to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            checks: results.to_vec(),
+        };
+        let sarif = convert_to_sarif(&scan_results);
+        match serde_json::to_string_pretty(&sarif) {
+            Ok(sarif_output) => println!("{}", sarif_output),
+            Err(e) => {
+                log(
+                    LogLevel::Error,
+                    &format!("failed to serialize results to SARIF: {}", e),
                 );
                 log(LogLevel::Info, "falling back to plain text output");
                 log_plain_results(results, vulnerable_count);
