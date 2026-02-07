@@ -1,4 +1,4 @@
-# GitHub Copilot Instructions for smugglex
+# Agent Instructions for smugglex
 
 ## Project Overview
 
