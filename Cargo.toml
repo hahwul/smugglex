@@ -9,7 +9,7 @@ license = "MIT"
 [dependencies]
 clap = { version = "4.5.54", features = ["derive"] }
 colored = "3.0.0"
-indicatif = "0.18.3"
+indicatif = "0.18.4"
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 url = "2.5.8"
 serde = { version = "1.0", features = ["derive"] }
