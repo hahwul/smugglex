@@ -199,6 +199,7 @@ async fn test_output_file_json_structure() {
             attack_duration_ms: None,
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
+            confidence: None,
         }],
     };
 
@@ -257,6 +258,7 @@ async fn test_vulnerable_count_calculation() {
             attack_duration_ms: Some(5000),
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
+            confidence: None,
         },
         CheckResult {
             check_type: "TE.CL".to_string(),
@@ -268,6 +270,7 @@ async fn test_vulnerable_count_calculation() {
             attack_duration_ms: None,
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
+            confidence: None,
         },
         CheckResult {
             check_type: "H2C".to_string(),
@@ -279,6 +282,7 @@ async fn test_vulnerable_count_calculation() {
             attack_duration_ms: Some(3000),
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
+            confidence: None,
         },
     ];
 
@@ -619,6 +623,7 @@ async fn test_results_aggregation() {
             attack_duration_ms: None,
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
+            confidence: None,
         },
         CheckResult {
             check_type: "TE.CL".to_string(),
@@ -630,6 +635,7 @@ async fn test_results_aggregation() {
             attack_duration_ms: Some(3000),
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
+            confidence: None,
         },
     ];
 

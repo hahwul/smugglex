@@ -7,8 +7,9 @@
 //! - Edge cases (large durations, special characters)
 //! - Different check types and status codes
 //! - Clone implementation
+//! - Confidence enum serialization
 
-use smugglex::model::{CheckResult, ScanResults};
+use smugglex::model::{CheckResult, Confidence, ScanResults};
 
 /// Helper function to create a test CheckResult
 fn create_test_check_result(
@@ -28,6 +29,7 @@ fn create_test_check_result(
         attack_duration_ms,
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: None,
     }
 }
 
@@ -144,6 +146,7 @@ fn test_check_result_zero_duration() {
         attack_duration_ms: Some(0),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: None,
     };
 
     assert_eq!(result.normal_duration_ms, 0);
@@ -163,6 +166,7 @@ fn test_check_result_special_characters() {
         attack_duration_ms: Some(5000),
         timestamp: "2024-01-01T12:00:00+00:00".to_string(),
         payload: None,
+        confidence: Some(Confidence::High),
     };
 
     let json = serde_json::to_string(&result).expect("Should serialize");
@@ -184,6 +188,7 @@ fn test_check_result_serialization_vulnerable() {
         attack_duration_ms: Some(10000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: Some(Confidence::Medium),
     };
 
     let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -229,6 +234,7 @@ fn test_check_result_clone() {
         attack_duration_ms: Some(3000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: Some(Confidence::High),
     };
 
     let cloned = result.clone();
@@ -236,6 +242,7 @@ fn test_check_result_clone() {
     assert_eq!(result.check_type, cloned.check_type);
     assert_eq!(result.vulnerable, cloned.vulnerable);
     assert_eq!(result.payload_index, cloned.payload_index);
+    assert_eq!(result.confidence, cloned.confidence);
 }
 
 #[test]
@@ -250,6 +257,7 @@ fn test_scan_results_creation() {
         attack_duration_ms: Some(5000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: Some(Confidence::High),
     };
 
     let check2 = CheckResult {
@@ -262,6 +270,7 @@ fn test_scan_results_creation() {
         attack_duration_ms: None,
         timestamp: "2024-01-01T12:00:01Z".to_string(),
         payload: None,
+        confidence: None,
     };
 
     let scan_results = ScanResults {
@@ -290,6 +299,7 @@ fn test_scan_results_serialization() {
         attack_duration_ms: Some(4000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: Some(Confidence::High),
     };
 
     let scan_results = ScanResults {
@@ -366,6 +376,7 @@ fn test_scan_results_multiple_checks() {
             attack_duration_ms: Some(3000),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
             payload: None,
+            confidence: Some(Confidence::High),
         },
         CheckResult {
             check_type: "TE.CL".to_string(),
@@ -377,6 +388,7 @@ fn test_scan_results_multiple_checks() {
             attack_duration_ms: None,
             timestamp: "2024-01-01T12:00:01Z".to_string(),
             payload: None,
+            confidence: None,
         },
         CheckResult {
             check_type: "TE.TE".to_string(),
@@ -388,6 +400,7 @@ fn test_scan_results_multiple_checks() {
             attack_duration_ms: Some(10000),
             timestamp: "2024-01-01T12:00:02Z".to_string(),
             payload: None,
+            confidence: Some(Confidence::Low),
         },
     ];
 
@@ -419,6 +432,7 @@ fn test_check_result_different_check_types() {
             attack_duration_ms: None,
             timestamp: "2024-01-01T12:00:00Z".to_string(),
             payload: None,
+            confidence: None,
         };
 
         assert_eq!(result.check_type, check_type);
@@ -438,6 +452,7 @@ fn test_check_result_timeout_scenarios() {
         attack_duration_ms: Some(15000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: Some(Confidence::High),
     };
 
     assert!(result1.attack_status.as_ref().unwrap().contains("504"));
@@ -453,6 +468,7 @@ fn test_check_result_timeout_scenarios() {
         attack_duration_ms: Some(10000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: Some(Confidence::Low),
     };
 
     assert_eq!(
@@ -476,6 +492,7 @@ fn test_payload_stored_in_vulnerable_result() {
         attack_duration_ms: Some(5000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: Some(payload_content.to_string()),
+        confidence: Some(Confidence::Medium),
     };
 
     assert!(result.vulnerable);
@@ -496,6 +513,7 @@ fn test_payload_is_none_for_non_vulnerable() {
         attack_duration_ms: None,
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: None,
     };
 
     assert!(!result.vulnerable);
@@ -515,6 +533,7 @@ fn test_payload_serialization_with_payload() {
         attack_duration_ms: Some(10000),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: Some("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n".to_string()),
+        confidence: Some(Confidence::Low),
     };
 
     let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -537,10 +556,87 @@ fn test_payload_serialization_without_payload() {
         attack_duration_ms: None,
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: None,
     };
 
     let json = serde_json::to_string(&result).expect("Failed to serialize");
 
     // Verify JSON does NOT contain payload field when it's None
     assert!(!json.contains("\"payload\":"));
+    // Verify JSON does NOT contain confidence field when it's None
+    assert!(!json.contains("\"confidence\":"));
+}
+
+// ========== Confidence Tests ==========
+
+#[test]
+fn test_confidence_serialization() {
+    // Test High
+    let result = CheckResult {
+        check_type: "CL.TE".to_string(),
+        vulnerable: true,
+        payload_index: Some(0),
+        normal_status: "HTTP/1.1 200 OK".to_string(),
+        attack_status: Some("HTTP/1.1 504 Gateway Timeout".to_string()),
+        normal_duration_ms: 100,
+        attack_duration_ms: Some(5000),
+        timestamp: "2024-01-01T12:00:00Z".to_string(),
+        payload: None,
+        confidence: Some(Confidence::High),
+    };
+    let json = serde_json::to_string(&result).expect("Failed to serialize");
+    assert!(json.contains("\"confidence\":\"high\""));
+
+    // Test Medium
+    let result = CheckResult {
+        confidence: Some(Confidence::Medium),
+        ..result.clone()
+    };
+    let json = serde_json::to_string(&result).expect("Failed to serialize");
+    assert!(json.contains("\"confidence\":\"medium\""));
+
+    // Test Low
+    let result = CheckResult {
+        confidence: Some(Confidence::Low),
+        ..result
+    };
+    let json = serde_json::to_string(&result).expect("Failed to serialize");
+    assert!(json.contains("\"confidence\":\"low\""));
+}
+
+#[test]
+fn test_confidence_skip_when_none() {
+    let result = CheckResult {
+        check_type: "CL.TE".to_string(),
+        vulnerable: false,
+        payload_index: None,
+        normal_status: "HTTP/1.1 200 OK".to_string(),
+        attack_status: None,
+        normal_duration_ms: 100,
+        attack_duration_ms: None,
+        timestamp: "2024-01-01T12:00:00Z".to_string(),
+        payload: None,
+        confidence: None,
+    };
+    let json = serde_json::to_string(&result).expect("Failed to serialize");
+    assert!(!json.contains("confidence"));
+}
+
+#[test]
+fn test_confidence_backward_compat_deserialization() {
+    // JSON without confidence field should deserialize with confidence: None
+    let json = r#"{
+        "check_type": "CL.TE",
+        "vulnerable": true,
+        "payload_index": 0,
+        "normal_status": "HTTP/1.1 200 OK",
+        "attack_status": "HTTP/1.1 504 Gateway Timeout",
+        "normal_duration_ms": 100,
+        "attack_duration_ms": 5000,
+        "timestamp": "2024-01-01T12:00:00Z"
+    }"#;
+
+    let result: CheckResult = serde_json::from_str(json).expect("Failed to deserialize");
+    assert!(result.vulnerable);
+    assert_eq!(result.confidence, None);
 }

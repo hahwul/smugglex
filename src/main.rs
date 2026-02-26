@@ -259,7 +259,11 @@ fn log_plain_results(results: &[CheckResult], vulnerable_count: usize) {
                 "{}",
                 format!("=== {} Vulnerability Details ===", result.check_type).bold()
             );
-            println!("{} {}", "Status:".bold(), "VULNERABLE".red().bold());
+            if let Some(ref confidence) = result.confidence {
+                println!("{} {} (Confidence: {:?})", "Status:".bold(), "VULNERABLE".red().bold(), confidence);
+            } else {
+                println!("{} {}", "Status:".bold(), "VULNERABLE".red().bold());
+            }
             if let Some(idx) = result.payload_index {
                 println!("{} {}", "Payload Index:".bold(), idx);
             }
