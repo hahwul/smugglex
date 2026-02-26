@@ -115,6 +115,7 @@ fn test_check_result_serialization() {
         attack_duration_ms: None,
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
+        confidence: None,
     };
 
     let json = serde_json::to_string(&result);

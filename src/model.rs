@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+/// Confidence level for a vulnerability detection
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    High,
+    Medium,
+    Low,
+}
+
 /// Result of a vulnerability check
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CheckResult {
@@ -13,6 +22,8 @@ pub struct CheckResult {
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<Confidence>,
 }
 
 /// Overall scan results
