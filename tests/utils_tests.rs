@@ -7,7 +7,7 @@
 //! - Multiple file exports
 //! - Protocol handling (HTTP/HTTPS)
 
-use smugglex::utils::{export_payload, sanitize_hostname};
+use smugglex::utils::{export_payload, parse_status_code, sanitize_hostname};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -184,4 +184,34 @@ fn test_export_payload_creates_directory_if_not_exists() {
     );
 
     cleanup_test_dir(temp_dir_str);
+}
+
+#[test]
+fn test_parse_status_code_http11_200() {
+    assert_eq!(parse_status_code("HTTP/1.1 200 OK"), Some(200));
+}
+
+#[test]
+fn test_parse_status_code_http10_404() {
+    assert_eq!(parse_status_code("HTTP/1.0 404 Not Found"), Some(404));
+}
+
+#[test]
+fn test_parse_status_code_http2() {
+    assert_eq!(parse_status_code("HTTP/2 301 Moved Permanently"), Some(301));
+}
+
+#[test]
+fn test_parse_status_code_invalid() {
+    assert_eq!(parse_status_code("not a status line"), None);
+}
+
+#[test]
+fn test_parse_status_code_empty() {
+    assert_eq!(parse_status_code(""), None);
+}
+
+#[test]
+fn test_parse_status_code_partial() {
+    assert_eq!(parse_status_code("HTTP/1.1"), None);
 }

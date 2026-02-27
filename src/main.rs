@@ -10,8 +10,9 @@ use url::Url;
 use smugglex::cli::{Cli, OutputFormat};
 use smugglex::error::Result;
 use smugglex::exploit::{
-    LocalhostAccessParams, extract_vulnerability_context, get_fuzz_paths, print_localhost_results,
-    print_path_fuzz_results, test_localhost_access, test_path_fuzz,
+    LocalhostAccessParams, PathFuzzParams, VulnerabilityContext, extract_vulnerability_context,
+    get_fuzz_paths, print_localhost_results, print_path_fuzz_results, test_localhost_access,
+    test_path_fuzz,
 };
 use smugglex::model::{CheckResult, ScanResults};
 use smugglex::payloads::{
@@ -291,6 +292,31 @@ fn log_plain_results(results: &[CheckResult], vulnerable_count: usize) {
     }
 }
 
+/// Extract vulnerability context and log it, returning None (with log) if unavailable.
+fn prepare_exploit_context(
+    results: &[CheckResult],
+    verbose: bool,
+) -> Option<VulnerabilityContext> {
+    let vuln_ctx = extract_vulnerability_context(results);
+    match &vuln_ctx {
+        Some(ctx) if verbose => {
+            println!(
+                "\n{} Using detected {} vulnerability for exploitation",
+                "[*]".cyan(),
+                ctx.vuln_type.yellow().bold()
+            );
+        }
+        None => {
+            log(
+                LogLevel::Error,
+                "cannot extract vulnerability context for exploitation",
+            );
+        }
+        _ => {}
+    }
+    vuln_ctx
+}
+
 async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
     let exploits: Vec<&str> = params.exploit_str.split(',').map(|s| s.trim()).collect();
 
@@ -299,25 +325,10 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
             "localhost-access" => {
                 log(LogLevel::Info, "running localhost-access exploit");
 
-                // Extract vulnerability context from results
-                let vuln_ctx = match extract_vulnerability_context(params.results) {
+                let vuln_ctx = match prepare_exploit_context(params.results, params.verbose) {
                     Some(ctx) => ctx,
-                    None => {
-                        log(
-                            LogLevel::Error,
-                            "cannot extract vulnerability context for exploitation",
-                        );
-                        continue;
-                    }
+                    None => continue,
                 };
-
-                if params.verbose {
-                    println!(
-                        "\n{} Using detected {} vulnerability for exploitation",
-                        "[*]".cyan(),
-                        vuln_ctx.vuln_type.yellow().bold()
-                    );
-                }
 
                 // Parse target ports
                 let localhost_ports: Vec<u16> = params
@@ -372,25 +383,10 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
             "path-fuzz" => {
                 log(LogLevel::Info, "running path-fuzz exploit");
 
-                // Extract vulnerability context from results
-                let vuln_ctx = match extract_vulnerability_context(params.results) {
+                let vuln_ctx = match prepare_exploit_context(params.results, params.verbose) {
                     Some(ctx) => ctx,
-                    None => {
-                        log(
-                            LogLevel::Error,
-                            "cannot extract vulnerability context for exploitation",
-                        );
-                        continue;
-                    }
+                    None => continue,
                 };
-
-                if params.verbose {
-                    println!(
-                        "\n{} Using detected {} vulnerability for exploitation",
-                        "[*]".cyan(),
-                        vuln_ctx.vuln_type.yellow().bold()
-                    );
-                }
 
                 // Get paths to fuzz
                 let fuzz_paths = match get_fuzz_paths(params.wordlist_path) {
@@ -413,18 +409,17 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                 }
 
                 // Run path fuzz test
-                match test_path_fuzz(
-                    params.host,
-                    params.port,
-                    params.path,
-                    params.use_tls,
-                    params.timeout,
-                    params.verbose,
-                    &vuln_ctx,
-                    &fuzz_paths,
-                )
-                .await
-                {
+                let path_fuzz_params = PathFuzzParams {
+                    host: params.host,
+                    port: params.port,
+                    path: params.path,
+                    use_tls: params.use_tls,
+                    timeout: params.timeout,
+                    verbose: params.verbose,
+                    vuln_ctx: &vuln_ctx,
+                    fuzz_paths: &fuzz_paths,
+                };
+                match test_path_fuzz(&path_fuzz_params).await {
                     Ok(path_fuzz_results) => {
                         print_path_fuzz_results(&path_fuzz_results, params.target_url);
                     }

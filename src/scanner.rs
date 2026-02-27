@@ -1,7 +1,7 @@
 use crate::error::{Result, SmugglexError};
 use crate::http::send_request;
 use crate::model::{CheckResult, Confidence};
-use crate::utils::export_payload;
+use crate::utils::{export_payload, parse_status_code};
 use chrono::Utc;
 use colored::*;
 use indicatif::ProgressBar;
@@ -39,16 +39,6 @@ struct BaselineMeasurement {
     status: String,
     duration: Duration,
     observed_status_codes: Vec<Option<u16>>,
-}
-
-/// Parse HTTP status code from a status line
-fn parse_status_code(status_line: &str) -> Option<u16> {
-    let parts: Vec<&str> = status_line.split_whitespace().collect();
-    if parts.len() >= 2 && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2")) {
-        parts[1].parse::<u16>().ok()
-    } else {
-        None
-    }
 }
 
 /// Measure baseline by sending BASELINE_COUNT normal requests and computing median timing

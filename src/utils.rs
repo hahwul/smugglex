@@ -73,6 +73,16 @@ pub fn export_payload(
     Ok(filename)
 }
 
+/// Parse HTTP status code from a status line
+pub fn parse_status_code(status_line: &str) -> Option<u16> {
+    let parts: Vec<&str> = status_line.split_whitespace().collect();
+    if parts.len() >= 2 && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2")) {
+        parts[1].parse::<u16>().ok()
+    } else {
+        None
+    }
+}
+
 /// Log levels for consistent output formatting
 pub enum LogLevel {
     Info,
