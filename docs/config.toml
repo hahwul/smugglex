@@ -1,6 +1,6 @@
 title = "smugglex"
 description = "HTTP Request Smuggling Scanner"
-base_url = "http://localhost:3000"
+base_url = ""
 
 [plugins]
 processors = ["markdown"]
