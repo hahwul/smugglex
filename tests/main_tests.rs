@@ -189,6 +189,7 @@ async fn test_output_file_json_structure() {
         target: "http://example.com".to_string(),
         method: "GET".to_string(),
         timestamp: Utc::now().to_rfc3339(),
+        fingerprint: None,
         checks: vec![CheckResult {
             check_type: "CL.TE".to_string(),
             vulnerable: false,
@@ -224,6 +225,7 @@ async fn test_output_file_creation() {
         target: "http://example.com".to_string(),
         method: "GET".to_string(),
         timestamp: Utc::now().to_rfc3339(),
+        fingerprint: None,
         checks: vec![],
     };
 

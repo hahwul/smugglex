@@ -26,12 +26,23 @@ pub struct CheckResult {
     pub confidence: Option<Confidence>,
 }
 
+/// Fingerprint information for JSON output
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FingerprintInfo {
+    pub detected_proxy: String,
+    pub server_header: Option<String>,
+    pub via_header: Option<String>,
+    pub powered_by: Option<String>,
+}
+
 /// Overall scan results
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScanResults {
     pub target: String,
     pub method: String,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<FingerprintInfo>,
     pub checks: Vec<CheckResult>,
 }
 

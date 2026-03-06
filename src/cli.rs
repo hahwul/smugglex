@@ -88,6 +88,18 @@ pub struct Cli {
     #[arg(help_heading = "DETECT", short = '1', long = "exit-first", action = clap::ArgAction::SetTrue)]
     pub exit_first: bool,
 
+    /// Enable proxy fingerprinting before scan
+    #[arg(help_heading = "DETECT", long = "fingerprint", action = clap::ArgAction::SetTrue)]
+    pub fingerprint: bool,
+
+    /// Enable mutation-based fuzzing
+    #[arg(help_heading = "DETECT", long = "fuzz", action = clap::ArgAction::SetTrue)]
+    pub fuzz: bool,
+
+    /// Mutation seed for reproducibility (default: 42)
+    #[arg(help_heading = "DETECT", long = "fuzz-seed", default_value_t = 42)]
+    pub fuzz_seed: u64,
+
     /// Exploit types to run after detection (comma-separated: localhost-access,path-fuzz)
     #[arg(help_heading = "EXPLOIT", short = 'e', long = "exploit")]
     pub exploit: Option<String>,

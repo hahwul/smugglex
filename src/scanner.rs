@@ -41,7 +41,8 @@ struct BaselineMeasurement {
     observed_status_codes: Vec<Option<u16>>,
 }
 
-/// Measure baseline by sending BASELINE_COUNT normal requests and computing median timing
+/// Measure baseline by sending BASELINE_COUNT normal requests and computing median timing.
+/// Requests are sent concurrently for faster baseline establishment.
 async fn measure_baseline(
     host: &str,
     port: u16,
@@ -55,18 +56,32 @@ async fn measure_baseline(
         path, host
     );
 
+    // Send baseline requests concurrently
+    let mut futures = Vec::with_capacity(BASELINE_COUNT);
+    for _ in 0..BASELINE_COUNT {
+        futures.push(send_request(
+            host,
+            port,
+            &normal_request,
+            timeout,
+            verbose,
+            use_tls,
+        ));
+    }
+
+    let results = futures::future::join_all(futures).await;
+
     let mut durations = Vec::with_capacity(BASELINE_COUNT);
     let mut observed_status_codes = Vec::with_capacity(BASELINE_COUNT);
     let mut last_status = String::new();
 
-    for _ in 0..BASELINE_COUNT {
-        let (response, duration) =
-            send_request(host, port, &normal_request, timeout, verbose, use_tls).await?;
-        let status_line = response.lines().next().unwrap_or("").to_string();
-        let code = parse_status_code(&status_line);
+    for result in results {
+        let (response, duration) = result?;
+        let status_line = response.lines().next().unwrap_or("");
+        let code = parse_status_code(status_line);
         observed_status_codes.push(code);
         durations.push(duration);
-        last_status = status_line;
+        last_status = status_line.to_string();
     }
 
     // Use median duration as the baseline
@@ -93,10 +108,10 @@ async fn check_single_payload(
 ) -> Result<Option<VulnerabilityInfo>> {
     match send_request(host, port, attack_request, timeout, verbose, use_tls).await {
         Ok((attack_response, attack_duration)) => {
-            let attack_status_line = attack_response.lines().next().unwrap_or("").to_string();
+            let attack_status_line = attack_response.lines().next().unwrap_or("");
             let attack_millis = attack_duration.as_millis();
 
-            let status_code = parse_status_code(&attack_status_line);
+            let status_code = parse_status_code(attack_status_line);
 
             // Only treat 408/504 as smuggling signal if baseline didn't also produce them
             let baseline_has_timeout = baseline_status_codes
@@ -108,7 +123,7 @@ async fn check_single_payload(
 
             if is_timeout_error || is_delayed {
                 Ok(Some(VulnerabilityInfo {
-                    status: attack_status_line,
+                    status: attack_status_line.to_string(),
                     duration: attack_duration,
                     is_connection_timeout: false,
                 }))
@@ -220,7 +235,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
     for (i, attack_request) in params.attack_requests.iter().enumerate() {
         if !params.verbose {
             let current = i + 1;
-            let percentage = (current as f64 / total_requests as f64 * 100.0) as u32;
+            let percentage = (current as u32 * 100) / total_requests as u32;
             params.pb.set_message(format!(
                 "[{}/{}] checking {} ({}/{} - {}%)",
                 params.current_check,

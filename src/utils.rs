@@ -22,8 +22,8 @@ pub async fn fetch_cookies(
 
     let mut cookies = Vec::new();
     for line in response.lines() {
-        let line_lower = line.to_lowercase();
-        if line_lower.starts_with("set-cookie:")
+        if line.len() >= 11
+            && line.as_bytes()[..11].eq_ignore_ascii_case(b"set-cookie:")
             && let Some(cookie_value) = line.split(':').nth(1)
         {
             // Extract just the cookie name=value, stop at semicolon
@@ -73,11 +73,12 @@ pub fn export_payload(
     Ok(filename)
 }
 
-/// Parse HTTP status code from a status line
+/// Parse HTTP status code from a status line (allocation-free)
 pub fn parse_status_code(status_line: &str) -> Option<u16> {
-    let parts: Vec<&str> = status_line.split_whitespace().collect();
-    if parts.len() >= 2 && (parts[0].starts_with("HTTP/1.") || parts[0].starts_with("HTTP/2")) {
-        parts[1].parse::<u16>().ok()
+    let mut parts = status_line.split_whitespace();
+    let protocol = parts.next()?;
+    if protocol.starts_with("HTTP/1.") || protocol.starts_with("HTTP/2") {
+        parts.next()?.parse::<u16>().ok()
     } else {
         None
     }
