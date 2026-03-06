@@ -87,7 +87,7 @@ fn parse_response_headers(response: &str) -> HashMap<String, String> {
         }
         if let Some((key, value)) = line.split_once(':') {
             headers.insert(
-                key.trim().to_lowercase(),
+                key.trim().to_ascii_lowercase(),
                 value.trim().to_string(),
             );
         }
@@ -98,13 +98,13 @@ fn parse_response_headers(response: &str) -> HashMap<String, String> {
 /// Identify the proxy type from parsed response headers.
 fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
     // Check specific indicator headers first (most reliable)
-    if headers.contains_key("cf-ray") || headers.contains_key("cf-cache-status") {
+    if headers.get("cf-ray").is_some() || headers.get("cf-cache-status").is_some() {
         return ProxyType::Cloudflare;
     }
-    if headers.contains_key("x-amz-cf-id") || headers.contains_key("x-amz-cf-pop") {
+    if headers.get("x-amz-cf-id").is_some() || headers.get("x-amz-cf-pop").is_some() {
         return ProxyType::CloudFront;
     }
-    if headers.contains_key("x-varnish") {
+    if headers.get("x-varnish").is_some() {
         return ProxyType::Varnish;
     }
     if headers.contains_key("x-served-by") {

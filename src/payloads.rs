@@ -3,7 +3,16 @@ pub fn format_custom_headers(custom_headers: &[String]) -> String {
     if custom_headers.is_empty() {
         String::new()
     } else {
-        format!("{}\r\n", custom_headers.join("\r\n"))
+        let total_len: usize = custom_headers.iter().map(|h| h.len() + 2).sum::<usize>() + 2;
+        let mut result = String::with_capacity(total_len);
+        for (i, header) in custom_headers.iter().enumerate() {
+            if i > 0 {
+                result.push_str("\r\n");
+            }
+            result.push_str(header);
+        }
+        result.push_str("\r\n");
+        result
     }
 }
 
@@ -196,7 +205,7 @@ pub fn get_cl_te_payloads(
 ) -> Vec<String> {
     let te_headers = get_te_header_variations();
 
-    let mut payloads = Vec::new();
+    let mut payloads = Vec::with_capacity(te_headers.len());
     let custom_header_str = format_custom_headers(custom_headers);
     let cookie_str = format_cookies(cookies);
 
@@ -229,7 +238,7 @@ pub fn get_te_cl_payloads(
 ) -> Vec<String> {
     let te_headers = get_te_header_variations();
 
-    let mut payloads = Vec::new();
+    let mut payloads = Vec::with_capacity(te_headers.len());
     let custom_header_str = format_custom_headers(custom_headers);
     let cookie_str = format_cookies(cookies);
 
@@ -379,7 +388,7 @@ pub fn get_te_te_payloads(
         ),
     ];
 
-    let mut payloads = Vec::new();
+    let mut payloads = Vec::with_capacity(te_variations.len() + extended_te_te_variations.len());
     for (te1, te2) in te_variations {
         payloads.push(format!(
             "{} {} HTTP/1.1\r\n\
@@ -433,7 +442,7 @@ pub fn get_h2c_payloads(
     let custom_header_str = format_custom_headers(custom_headers);
     let cookie_str = format_cookies(cookies);
 
-    let mut payloads = Vec::new();
+    let mut payloads = Vec::with_capacity(16);
 
     // Basic H2C upgrade request
     // The front-end may not process the upgrade, but the back-end might
@@ -625,7 +634,7 @@ pub fn get_h2_payloads(
     let custom_header_str = format_custom_headers(custom_headers);
     let cookie_str = format_cookies(cookies);
 
-    let mut payloads = Vec::new();
+    let mut payloads = Vec::with_capacity(30);
 
     // === HTTP/2 Pseudo-Header Injection Attacks ===
     // These attacks exploit how servers handle duplicate or malformed pseudo-headers
@@ -1055,7 +1064,7 @@ pub fn get_cl_edge_case_payloads(
     let headers_str = format_custom_headers(custom_headers);
     let cookies_str = format_cookies(cookies);
 
-    let mut payloads = Vec::new();
+    let mut payloads = Vec::with_capacity(40);
 
     // === Multiple Content-Length headers ===
 

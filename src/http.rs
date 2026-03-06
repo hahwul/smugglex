@@ -63,9 +63,9 @@ pub async fn send_request(
     let mut stream = get_stream(host, port, use_tls).await?;
     stream.write_all(request.as_bytes()).await?;
 
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(8192);
     tokio::time::timeout(Duration::from_secs(timeout), stream.read_to_end(&mut buf)).await??;
-    let response_str = String::from_utf8_lossy(&buf).to_string();
+    let response_str = String::from_utf8_lossy(&buf).into_owned();
 
     let duration = start.elapsed();
 

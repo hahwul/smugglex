@@ -50,17 +50,18 @@ impl Mutator {
 
     /// Take seed payloads and return originals + deduplicated mutants.
     pub fn mutate_payloads(&mut self, seeds: &[String]) -> Vec<String> {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
+        let expected = seeds.len() * (self.config.mutations_per_payload + 1);
+        let mut seen = HashSet::with_capacity(expected);
+        let mut result = Vec::with_capacity(expected);
 
-        // Keep all originals
+        // Keep all originals (single clone per unique seed)
         for s in seeds {
             if seen.insert(s.clone()) {
                 result.push(s.clone());
             }
         }
 
-        // Generate mutants
+        // Generate mutants (move into result, clone only for seen check)
         for seed in seeds {
             for _ in 0..self.config.mutations_per_payload {
                 let strategy = self.rand_index(9);
@@ -76,7 +77,8 @@ impl Mutator {
                     8 => self.mutate_body_padding(seed),
                     _ => seed.clone(),
                 };
-                if seen.insert(mutant.clone()) {
+                if !seen.contains(&mutant) {
+                    seen.insert(mutant.clone());
                     result.push(mutant);
                 }
             }
@@ -92,7 +94,8 @@ impl Mutator {
 
         if let Some(pos) = payload.find("Transfer-Encoding:") {
             let insert_at = pos + "Transfer-Encoding:".len();
-            let mut result = payload[..insert_at].to_string();
+            let mut result = String::with_capacity(payload.len() + 2);
+            result.push_str(&payload[..insert_at]);
             result.push_str(ws);
             result.push_str(&payload[insert_at..]);
             result
@@ -285,10 +288,20 @@ impl Mutator {
 }
 
 /// Case-insensitive search for a substring, returns byte offset of match.
+/// Uses ASCII case comparison to avoid heap allocation.
 fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    let haystack_lower = haystack.to_lowercase();
-    let needle_lower = needle.to_lowercase();
-    haystack_lower.find(&needle_lower)
+    let needle_bytes = needle.as_bytes();
+    let needle_len = needle_bytes.len();
+    if needle_len == 0 || haystack.len() < needle_len {
+        return None;
+    }
+    let haystack_bytes = haystack.as_bytes();
+    for i in 0..=(haystack_bytes.len() - needle_len) {
+        if haystack_bytes[i..i + needle_len].eq_ignore_ascii_case(needle_bytes) {
+            return Some(i);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
