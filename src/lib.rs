@@ -1,8 +1,10 @@
 pub mod cli;
 pub mod error;
 pub mod exploit;
+pub mod fingerprint;
 pub mod http;
 pub mod model;
+pub mod mutator;
 pub mod payloads;
 pub mod scanner;
 pub mod utils;

@@ -277,6 +277,7 @@ fn test_scan_results_creation() {
         target: "https://example.com".to_string(),
         method: "POST".to_string(),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
+        fingerprint: None,
         checks: vec![check1, check2],
     };
 
@@ -306,6 +307,7 @@ fn test_scan_results_serialization() {
         target: "https://api.example.com/test".to_string(),
         method: "GET".to_string(),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
+        fingerprint: None,
         checks: vec![check],
     };
 
@@ -352,6 +354,7 @@ fn test_scan_results_empty_checks() {
         target: "http://test.com".to_string(),
         method: "GET".to_string(),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
+        fingerprint: None,
         checks: vec![],
     };
 
@@ -408,6 +411,7 @@ fn test_scan_results_multiple_checks() {
         target: "https://vulnerable.example.com".to_string(),
         method: "POST".to_string(),
         timestamp: "2024-01-01T12:00:00Z".to_string(),
+        fingerprint: None,
         checks: checks.clone(),
     };
 

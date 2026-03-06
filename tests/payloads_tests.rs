@@ -1374,3 +1374,121 @@ fn test_h2_payload_count_by_category() {
         "Should have at least 3 forbidden header attacks"
     );
 }
+
+// ========== CL Edge Case Payload Tests ==========
+
+#[test]
+fn test_cl_edge_case_payloads_count() {
+    let payloads = get_cl_edge_case_payloads("/test", "example.com", "POST", &[], &[]);
+    assert!(
+        payloads.len() >= 30,
+        "Expected at least 30 CL edge case payloads, got {}",
+        payloads.len()
+    );
+}
+
+#[test]
+fn test_cl_edge_case_multiple_cl_headers() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    let has_dual_cl = payloads.iter().any(|p| {
+        p.matches("Content-Length:").count() >= 2
+    });
+    assert!(has_dual_cl, "Should contain payloads with multiple Content-Length headers");
+}
+
+#[test]
+fn test_cl_edge_case_cl_zero_with_body() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    let has_cl_zero_body = payloads.iter().any(|p| {
+        p.contains("Content-Length: 0\r\n") && p.contains("GET /admin")
+    });
+    assert!(has_cl_zero_body, "Should contain CL:0 with smuggled body");
+}
+
+#[test]
+fn test_cl_edge_case_chunk_extensions() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    let has_chunk_ext = payloads.iter().any(|p| p.contains(";ext=val"));
+    assert!(has_chunk_ext, "Should contain chunk extension payloads");
+}
+
+#[test]
+fn test_cl_edge_case_leading_zeros() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    let has_leading_zeros = payloads.iter().any(|p| p.contains("Content-Length: 06"));
+    assert!(has_leading_zeros, "Should contain CL with leading zeros");
+}
+
+#[test]
+fn test_cl_edge_case_cl_value_variations() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    // Plus prefix
+    assert!(payloads.iter().any(|p| p.contains("Content-Length: +6")), "Should contain +6 CL");
+    // Negative
+    assert!(payloads.iter().any(|p| p.contains("Content-Length: -1")), "Should contain -1 CL");
+    // Hex
+    assert!(payloads.iter().any(|p| p.contains("Content-Length: 0x06")), "Should contain hex CL");
+    // Decimal
+    assert!(payloads.iter().any(|p| p.contains("Content-Length: 6.0")), "Should contain decimal CL");
+    // Scientific
+    assert!(payloads.iter().any(|p| p.contains("Content-Length: 6e0")), "Should contain scientific CL");
+}
+
+#[test]
+fn test_cl_edge_case_header_name_variations() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    // Underscore variation
+    assert!(payloads.iter().any(|p| p.contains("Content_Length:")), "Should contain underscore CL");
+    // Lowercase
+    assert!(payloads.iter().any(|p| p.contains("content-length:")), "Should contain lowercase CL");
+    // Space before colon
+    assert!(payloads.iter().any(|p| p.contains("Content-Length :")), "Should contain space-before-colon CL");
+}
+
+#[test]
+fn test_cl_edge_case_with_custom_headers() {
+    let custom = vec!["X-Custom: test".to_string()];
+    let payloads = get_cl_edge_case_payloads("/api", "example.com", "POST", &custom, &[]);
+
+    for payload in &payloads {
+        assert!(payload.contains("X-Custom: test"), "Custom header should be present");
+        assert!(payload.contains("Host: example.com"), "Host header should be present");
+    }
+}
+
+#[test]
+fn test_cl_edge_case_with_cookies() {
+    let cookies = vec!["session=abc".to_string()];
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &cookies);
+
+    for payload in &payloads {
+        assert!(payload.contains("Cookie: session=abc"), "Cookie should be present");
+    }
+}
+
+#[test]
+fn test_cl_edge_case_te_ordering() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    // TE first, CL second
+    let has_te_first = payloads.iter().any(|p| {
+        let te_pos = p.find("Transfer-Encoding:");
+        let cl_pos = p.find("Content-Length:");
+        matches!((te_pos, cl_pos), (Some(t), Some(c)) if t < c)
+    });
+    assert!(has_te_first, "Should have TE-before-CL ordering variant");
+}
+
+#[test]
+fn test_cl_edge_case_chunked_trailers() {
+    let payloads = get_cl_edge_case_payloads("/", "example.com", "POST", &[], &[]);
+
+    let has_trailer = payloads.iter().any(|p| p.contains("Trailer: value"));
+    assert!(has_trailer, "Should contain trailer after final chunk");
+}

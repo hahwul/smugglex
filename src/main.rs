@@ -14,9 +14,12 @@ use smugglex::exploit::{
     get_fuzz_paths, print_localhost_results, print_path_fuzz_results, test_localhost_access,
     test_path_fuzz,
 };
-use smugglex::model::{CheckResult, ScanResults};
+use smugglex::fingerprint::{fingerprint_target, suggest_checks};
+use smugglex::model::{CheckResult, FingerprintInfo, ScanResults};
+use smugglex::mutator::{Mutator, MutatorConfig};
 use smugglex::payloads::{
-    get_cl_te_payloads, get_h2_payloads, get_h2c_payloads, get_te_cl_payloads, get_te_te_payloads,
+    get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
+    get_te_cl_payloads, get_te_te_payloads,
 };
 use smugglex::scanner::{CheckParams, run_checks_for_type};
 use smugglex::utils::{LogLevel, fetch_cookies, log};
@@ -106,6 +109,40 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
 
     let pb = setup_progress_bar(cli.verbose);
 
+    // Fingerprinting pre-step
+    let mut fingerprint_info: Option<FingerprintInfo> = None;
+    let mut suggested_order: Option<Vec<&str>> = None;
+
+    if cli.fingerprint {
+        log(LogLevel::Info, "running proxy fingerprint probe");
+        match fingerprint_target(host, port, path, cli.timeout, cli.verbose, use_tls).await {
+            Ok(fp) => {
+                log(
+                    LogLevel::Info,
+                    &format!("detected proxy: {}", fp.detected_proxy),
+                );
+                if let Some(ref server) = fp.server_header {
+                    log(LogLevel::Info, &format!("server header: {}", server));
+                }
+                if cli.format.is_json() {
+                    fingerprint_info = Some(FingerprintInfo {
+                        detected_proxy: fp.detected_proxy.to_string(),
+                        server_header: fp.server_header.clone(),
+                        via_header: fp.via_header.clone(),
+                        powered_by: fp.powered_by.clone(),
+                    });
+                }
+                suggested_order = Some(suggest_checks(&fp));
+            }
+            Err(e) => {
+                log(
+                    LogLevel::Warning,
+                    &format!("fingerprint probe failed: {}", e),
+                );
+            }
+        }
+    }
+
     let all_checks = [
         (
             "cl-te",
@@ -115,6 +152,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
         ("te-te", get_te_te_payloads),
         ("h2c", get_h2c_payloads),
         ("h2", get_h2_payloads),
+        ("cl-edge", get_cl_edge_case_payloads),
     ];
 
     let checks_to_run: Vec<_> = if let Some(ref checks_str) = cli.checks {
@@ -123,6 +161,15 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             .into_iter()
             .filter(|(name, _)| selected_checks.contains(name))
             .collect()
+    } else if let Some(ref order) = suggested_order {
+        // Reorder checks based on fingerprint suggestion
+        let mut ordered = Vec::new();
+        for name in order {
+            if let Some(entry) = all_checks.iter().find(|(n, _)| n == name) {
+                ordered.push(*entry);
+            }
+        }
+        ordered
     } else {
         all_checks.to_vec()
     };
@@ -136,7 +183,17 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
             break;
         }
 
-        let payloads = payload_fn(path, host_header, &cli.method, &cli.headers, &cookies);
+        let mut payloads = payload_fn(path, host_header, &cli.method, &cli.headers, &cookies);
+
+        if cli.fuzz {
+            let config = MutatorConfig {
+                seed: cli.fuzz_seed,
+                mutations_per_payload: 5,
+            };
+            let mut mutator = Mutator::new(config);
+            payloads = mutator.mutate_payloads(&payloads);
+        }
+
         let params = CheckParams {
             pb: &pb,
             check_name,
@@ -162,7 +219,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
         pb.finish_and_clear();
     }
 
-    log_scan_results(&results, &cli.format, target_url, &cli.method);
+    log_scan_results(&results, &cli.format, target_url, &cli.method, &fingerprint_info);
 
     // Run exploits if requested and vulnerabilities were found
     if let Some(ref exploit_str) = cli.exploit {
@@ -190,7 +247,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
     }
 
     if let Some(ref output_file) = cli.output {
-        save_results_to_file(output_file, target_url, &cli.method, results)?;
+        save_results_to_file(output_file, target_url, &cli.method, results, &fingerprint_info)?;
     }
 
     let duration = start_time.elapsed();
@@ -222,6 +279,7 @@ fn log_scan_results(
     format: &OutputFormat,
     target_url: &str,
     method: &str,
+    fingerprint_info: &Option<FingerprintInfo>,
 ) {
     let vulnerable_count = results.iter().filter(|r| r.vulnerable).count();
 
@@ -230,6 +288,7 @@ fn log_scan_results(
             target: target_url.to_string(),
             method: method.to_string(),
             timestamp: Utc::now().to_rfc3339(),
+            fingerprint: fingerprint_info.clone(),
             checks: results.to_vec(),
         };
         match serde_json::to_string_pretty(&scan_results) {
@@ -445,11 +504,13 @@ fn save_results_to_file(
     target_url: &str,
     method: &str,
     results: Vec<CheckResult>,
+    fingerprint_info: &Option<FingerprintInfo>,
 ) -> Result<()> {
     let scan_results = ScanResults {
         target: target_url.to_string(),
         method: method.to_string(),
         timestamp: Utc::now().to_rfc3339(),
+        fingerprint: fingerprint_info.clone(),
         checks: results,
     };
     let json_output = serde_json::to_string_pretty(&scan_results)?;
