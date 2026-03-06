@@ -1,43 +1,48 @@
 +++
-title = "Usage"
-description = "Learn how to use smugglex with detailed options and examples"
-weight = 2
-sort_by = "weight"
-
-[extra]
+title = "Installation"
+description = "Install smugglex on your system"
 +++
 
-This section provides detailed information on how to use smugglex effectively.
-
-## Overview
-
-Learn how to configure and run smugglex for different testing scenarios:
-
-- [Options and Flags](/usage/options-and-flags) - Command-line options and flags
-- [Configuration](/usage/configuration) - Configuration settings
-- [Examples](/usage/examples) - Practical usage examples
-
-## Basic Usage
-
-Run a basic scan on a target URL:
+## Homebrew
 
 ```bash
-smugglex https://target.com/
+brew install hahwul/smugglex/smugglex
 ```
 
-Enable verbose output:
+## Cargo
 
 ```bash
-smugglex https://target.com/ -v
+cargo install smugglex
 ```
 
-Save results to JSON:
+## Snap
 
 ```bash
-smugglex https://target.com/ -o results.json
+snap install smugglex
 ```
 
-## References
+## Nix
 
-- [Getting Started](/getting-started) - Installation and first scan
-- [Advanced](/advanced) - Advanced features and exploitation
+```bash
+nix profile install github:hahwul/smugglex
+```
+
+## Binary Download
+
+Pre-built binaries are available from [GitHub Releases](https://github.com/hahwul/smugglex/releases).
+
+## Build from Source
+
+Requires Rust 1.70+.
+
+```bash
+git clone https://github.com/hahwul/smugglex
+cd smugglex
+cargo install --path .
+```
+
+## Verify
+
+```bash
+smugglex --version
+```

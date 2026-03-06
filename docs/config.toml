@@ -1,53 +1,35 @@
-# The URL the site will be built for
-base_url = "https://smugglex.hahwul.com"
+title = "smugglex"
+description = "HTTP Request Smuggling Scanner"
+base_url = "http://localhost:3000"
 
-title = "SmuggleX"
-theme = "goyo"
-description = "HTTP Request Smuggling"
+[plugins]
+processors = ["markdown"]
 
-# Whether to automatically compile all Sass files in the sass directory
-compile_sass = false
+[content.files]
+allow_extensions = ["jpg", "jpeg", "png", "gif", "svg", "webp"]
 
-# Whether to build a search index to be used later on by a JavaScript library
-build_search_index = true
+[highlight]
+enabled = true
+theme = "github-dark"
+use_cdn = true
+
+[search]
+enabled = true
+format = "fuse_json"
+fields = ["title", "content"]
+filename = "search.json"
+exclude = []
+
+[pagination]
+enabled = false
+
+[sitemap]
+enabled = true
+filename = "sitemap.xml"
+changefreq = "weekly"
+priority = 0.5
 
 [markdown]
-# Whether to do syntax highlighting
-# Theme can be customised by setting the `highlight_theme` variable to a theme supported by Zola
-highlight_code = true
-bottom_footnotes = true
-highlight_theme = "ayu-mirage"
-
-[extra]
-badge = "v3.0.0"
-default_thumbnail = "images/preview.jpg"
-footer_html = "<div style='display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap;'><a href='https://www.hahwul.com' target='_blank' rel='noopener noreferrer' style='display: inline-flex; align-items: center;'><img src='https://www.hahwul.com/images/logo-gray.png' alt='HAHWUL' style='height: 30px' /></a><span style='opacity: 0.6;'>•</span><span>Powered by <a href='https://www.getzola.org' class='font-medium text-base-content/70 hover:text-base-content transition-colors duration-200'>Zola</a> and <a href='https://github.com/hahwul/goyo' class='font-medium text-base-content/70 hover:text-base-content transition-colors duration-200'>Goyo</a></span></div>"
-twitter_site = "@hahwul"
-twitter_creator = "@hahwul"
-sidebar_expand_depth = 0
-disable_root_sidebar_hide = false
-
-# lang_aliases = { en = "English", ko = "한국어" }
-
-nav = [
-    { name = "Documents", url = "/getting-started/introduction", type = "url", icon = "fa-solid fa-book" },
-    { name = "GitHub", url = "https://github.com/hahwul/smugglex", type = "url", icon = "fa-brands fa-github" },
-    { name = "Links", type = "dropdown", icon = "fa-solid fa-link", members = [
-        { name = "Crates", url = "https://crates.io/crates/smugglex", type = "url", icon = "fa-solid fa-box" },
-        { name = "Creator Blog", url = "https://www.hahwul.com", type = "url", icon = "fa-solid fa-fire-flame-curved" },
-    ] },
-]
-
-[extra.logo]
-text = "SmuggleX"                              # Text when no logo image
-image_path = "images/smugglex-dark.png"             # Default logo image path
-image_padding = "10px"                      # Optional padding
-dark_image_path = "images/smugglex-dark.png"   # Logo for dark theme (optional)
-light_image_path = "images/smugglex-light.png" # Logo for light theme (optional)
-
-[extra.theme]
-colorset = "dark"           # Options: "dark" or "light"
-brightness = "normal"       # Common brightness: "darker", "normal", "lighter"
-dark_brightness = "darker"  # Override brightness for dark theme (optional)
-light_brightness = "normal" # Override brightness for light theme (optional)
-disable_toggle = false      # Hides dark/light mode toggle
+safe = false
+lazy_loading = false
+emoji = false
