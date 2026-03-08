@@ -30,7 +30,7 @@
           smugglex = rustPlatform.buildRustPackage {
             pname = "smugglex";
             # Note: Version should be updated manually when releasing new versions
-            version = "0.1.0";
+            version = "0.2.0";
 
             src = ./.;
 
