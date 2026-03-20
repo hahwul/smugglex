@@ -7,27 +7,44 @@ use colored::*;
 use indicatif::ProgressBar;
 use std::time::Duration;
 
-// Detection thresholds
-pub const TIMING_MULTIPLIER: u128 = 3; // Flag if response is 3x slower than baseline
-pub const MIN_DELAY_MS: u128 = 1000; // Minimum delay to consider (1 second)
-pub const DEFAULT_BASELINE_COUNT: usize = 3; // Default number of baseline measurements
-pub const CONFIRMATION_RETRIES: usize = 2; // Number of confirmation retries
+/// Multiplier applied to baseline timing to determine anomaly threshold
+pub const TIMING_MULTIPLIER: u128 = 3;
+/// Minimum response delay in milliseconds to consider as suspicious
+pub const MIN_DELAY_MS: u128 = 1000;
+/// Default number of baseline requests for timing measurement
+pub const DEFAULT_BASELINE_COUNT: usize = 3;
+/// Number of retries used to confirm a detected vulnerability
+pub const CONFIRMATION_RETRIES: usize = 2;
 
 /// Parameters for running vulnerability checks
 pub struct CheckParams<'a> {
+    /// Progress bar for displaying scan status
     pub pb: &'a ProgressBar,
+    /// Name of the check type (e.g., "CL.TE", "TE.CL")
     pub check_name: &'a str,
+    /// Target hostname
     pub host: &'a str,
+    /// Target port number
     pub port: u16,
+    /// Request path on the target
     pub path: &'a str,
+    /// List of raw HTTP attack payloads to test
     pub attack_requests: Vec<String>,
+    /// Socket timeout in seconds
     pub timeout: u64,
+    /// Whether to print verbose debug output
     pub verbose: bool,
+    /// Whether to use TLS for connections
     pub use_tls: bool,
+    /// Directory to export successful payloads to
     pub export_dir: Option<&'a str>,
+    /// Index of the current check (for progress display)
     pub current_check: usize,
+    /// Total number of checks to run (for progress display)
     pub total_checks: usize,
+    /// Delay in milliseconds between requests
     pub delay: u64,
+    /// Number of baseline requests for timing measurement
     pub baseline_count: usize,
 }
 

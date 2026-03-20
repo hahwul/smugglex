@@ -105,8 +105,11 @@ pub fn parse_status_code(status_line: &str) -> Option<u16> {
 
 /// Log levels for consistent output formatting
 pub enum LogLevel {
+    /// Informational messages (suppressed in quiet mode)
     Info,
+    /// Warning messages indicating potential issues
     Warning,
+    /// Error messages indicating failures
     Error,
 }
 

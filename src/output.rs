@@ -7,6 +7,7 @@ use crate::error::Result;
 use crate::model::{CheckResult, FingerprintInfo, ScanResults};
 use crate::utils::{LogLevel, log};
 
+/// Log scan results in the specified output format (plain text or JSON).
 pub fn log_scan_results(
     results: &[CheckResult],
     format: &crate::cli::OutputFormat,
@@ -40,6 +41,7 @@ pub fn log_scan_results(
     }
 }
 
+/// Display scan results as human-readable plain text.
 pub fn log_plain_results(results: &[CheckResult], vulnerable_count: usize) {
     if vulnerable_count > 0 {
         log(
@@ -92,6 +94,7 @@ pub fn log_plain_results(results: &[CheckResult], vulnerable_count: usize) {
     }
 }
 
+/// Serialize scan results to JSON and write them to a file.
 pub fn save_results_to_file(
     output_file: &str,
     target_url: &str,
