@@ -36,6 +36,7 @@ struct ExploitParams<'a> {
     target_url: &'a str,
     ports_str: &'a str,
     wordlist_path: Option<&'a str>,
+    delay: u64,
 }
 
 #[tokio::main]
@@ -272,6 +273,7 @@ async fn process_url(target_url: &str, cli: &Cli) -> Result<()> {
                 target_url,
                 ports_str: &cli.exploit_ports,
                 wordlist_path: cli.exploit_wordlist.as_deref(),
+                delay: cli.delay,
             };
             run_exploits(&exploit_params).await?;
         } else {
@@ -388,6 +390,7 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     verbose: params.verbose,
                     vuln_ctx: &vuln_ctx,
                     localhost_ports: &localhost_ports,
+                    delay: params.delay,
                 };
                 match test_localhost_access(&localhost_params).await {
                     Ok(localhost_results) => {
@@ -439,6 +442,7 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     verbose: params.verbose,
                     vuln_ctx: &vuln_ctx,
                     fuzz_paths: &fuzz_paths,
+                    delay: params.delay,
                 };
                 match test_path_fuzz(&path_fuzz_params).await {
                     Ok(path_fuzz_results) => {
