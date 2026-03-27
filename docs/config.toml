@@ -1,6 +1,6 @@
 title = "smugglex"
 description = "HTTP Request Smuggling Scanner"
-base_url = ""
+base_url = "https://smugglex.hahwul.com"
 
 [plugins]
 processors = ["markdown"]
