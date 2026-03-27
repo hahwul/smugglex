@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Proxy and server fingerprinting">
+  <title>Fingerprinting - smugglex</title>
+  <meta property="og:title" content="Fingerprinting">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://smugglex.hahwul.com/advanced/fingerprinting/">
+<meta property="og:description" content="Proxy and server fingerprinting">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Fingerprinting">
+<meta name="twitter:description" content="Proxy and server fingerprinting">
+  <link rel="stylesheet" href="https://smugglex.hahwul.com/css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  
+</head>
+<body data-section="advanced">
+<header class="docs-header">
+  <a href="https://smugglex.hahwul.com/" class="logo">smugglex <span>Docs</span></a>
+  <nav>
+    <a href="https://smugglex.hahwul.com/usage/">Usage</a>
+    <a href="https://smugglex.hahwul.com/checks/">Checks</a>
+    <a href="https://smugglex.hahwul.com/advanced/">Advanced</a>
+  </nav>
+  <div class="header-right">
+    <button class="search-trigger" onclick="openSearch()" title="Search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Search</span>
+      <kbd>&#8984;K</kbd>
+    </button>
+    <a href="https://github.com/hahwul/smugglex">GitHub</a>
+  </div>
+</header>
+<div class="search-overlay" id="searchOverlay" onclick="if(event.target===this)closeSearch()">
+  <div class="search-modal">
+    <div class="search-input-wrap">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="searchInput" placeholder="Search documentation..." autocomplete="off">
+      <kbd onclick="closeSearch()">ESC</kbd>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
+<div class="docs-container">
+  <aside class="docs-sidebar">
+    <a href="https://smugglex.hahwul.com/" class="sidebar-logo">
+      <img src="https://smugglex.hahwul.com/images/logo-single.png" alt="smugglex">
+    </a>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Getting Started</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/usage/">Installation</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/quick-start/">Quick Start</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/options/">Options</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/output/">Output</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Checks</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/checks/">Overview</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/cl-te/">CL.TE</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/te-cl/">TE.CL</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/te-te/">TE.TE</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/h2c/">H2C</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/h2/">H2</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/cl-edge/">CL-Edge</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Advanced</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/advanced/">Overview</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/fingerprinting/">Fingerprinting</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/fuzzing/">Fuzzing</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/exploitation/">Exploitation</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/pipeline/">Pipeline</a></li>
+      </ul>
+    </div>
+  </aside>
+  <main class="docs-main">
+    <h1>Fingerprinting</h1>
+    <p>smugglex can identify the proxy/server stack before scanning, helping prioritize which checks are most likely to succeed.</p>
+<h2 id="usage">Usage</h2>
+<pre><code class="language-bash hljs">smugglex --fingerprint https://target.com
+</code></pre>
+<h2 id="detected-servers">Detected Servers</h2>
+<p>Nginx, Apache, Varnish, CloudFront, Cloudflare, HAProxy, Envoy, ATS (Apache Traffic Server), Squid, Caddy, IIS, Traefik, Akamai, Fastly, and more.</p>
+<h2 id="how-it-works">How It Works</h2>
+<p>Analyzes response headers (<code>Server</code>, <code>Via</code>, <code>X-Powered-By</code>, etc.) and behavior patterns to identify the proxy/server combination.</p>
+<h2 id="json-output">JSON Output</h2>
+<pre><code class="language-json hljs">{
+  &quot;fingerprint&quot;: {
+    &quot;detected_proxy&quot;: &quot;cloudflare&quot;,
+    &quot;server&quot;: &quot;cloudflare&quot;,
+    &quot;via&quot;: null,
+    &quot;x_powered_by&quot;: null
+  }
+}
+</code></pre>
+
+    <div class="docs-footer">
+      <p>smugglex - HTTP Request Smuggling Scanner</p>
+      <p>
+        <a href="https://www.hahwul.com" target="_blank" rel="noopener"><img src="https://smugglex.hahwul.com/images/hahwul.webp" class="hahwul-img" alt="hahwul.com"></a>
+      </p>
+    </div>
+  </main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
+<script src="https://smugglex.hahwul.com/js/search.js"></script>
+<script src="https://smugglex.hahwul.com/js/toc.js"></script>
+</body>
+</html>
+  <aside class="docs-toc" id="docsToc">
+    <div class="toc-title">On this page</div>
+    <nav id="tocNav"></nav>
+  </aside>

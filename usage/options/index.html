@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="All CLI options for smugglex">
+  <title>Options - smugglex</title>
+  <meta property="og:title" content="Options">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://smugglex.hahwul.com/usage/options/">
+<meta property="og:description" content="All CLI options for smugglex">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Options">
+<meta name="twitter:description" content="All CLI options for smugglex">
+  <link rel="stylesheet" href="https://smugglex.hahwul.com/css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  
+</head>
+<body data-section="usage">
+<header class="docs-header">
+  <a href="https://smugglex.hahwul.com/" class="logo">smugglex <span>Docs</span></a>
+  <nav>
+    <a href="https://smugglex.hahwul.com/usage/">Usage</a>
+    <a href="https://smugglex.hahwul.com/checks/">Checks</a>
+    <a href="https://smugglex.hahwul.com/advanced/">Advanced</a>
+  </nav>
+  <div class="header-right">
+    <button class="search-trigger" onclick="openSearch()" title="Search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Search</span>
+      <kbd>&#8984;K</kbd>
+    </button>
+    <a href="https://github.com/hahwul/smugglex">GitHub</a>
+  </div>
+</header>
+<div class="search-overlay" id="searchOverlay" onclick="if(event.target===this)closeSearch()">
+  <div class="search-modal">
+    <div class="search-input-wrap">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="searchInput" placeholder="Search documentation..." autocomplete="off">
+      <kbd onclick="closeSearch()">ESC</kbd>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
+<div class="docs-container">
+  <aside class="docs-sidebar">
+    <a href="https://smugglex.hahwul.com/" class="sidebar-logo">
+      <img src="https://smugglex.hahwul.com/images/logo-single.png" alt="smugglex">
+    </a>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Getting Started</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/usage/">Installation</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/quick-start/">Quick Start</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/options/">Options</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/output/">Output</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Checks</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/checks/">Overview</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/cl-te/">CL.TE</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/te-cl/">TE.CL</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/te-te/">TE.TE</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/h2c/">H2C</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/h2/">H2</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/cl-edge/">CL-Edge</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Advanced</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/advanced/">Overview</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/fingerprinting/">Fingerprinting</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/fuzzing/">Fuzzing</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/exploitation/">Exploitation</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/pipeline/">Pipeline</a></li>
+      </ul>
+    </div>
+  </aside>
+  <main class="docs-main">
+    <h1>Options</h1>
+    <h2 id="target">Target</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;URLs&gt;</code></td>
+<td>Target URLs (positional, supports multiple)</td>
+</tr>
+<tr>
+<td>stdin</td>
+<td>Pipe URLs from other tools</td>
+</tr>
+</tbody>
+</table>
+<h2 id="request">Request</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-m, --method</code></td>
+<td>POST</td>
+<td>HTTP method</td>
+</tr>
+<tr>
+<td><code>-t, --timeout</code></td>
+<td>10</td>
+<td>Socket timeout in seconds</td>
+</tr>
+<tr>
+<td><code>-H, --header</code></td>
+<td></td>
+<td>Custom header (repeatable)</td>
+</tr>
+<tr>
+<td><code>--vhost</code></td>
+<td></td>
+<td>Virtual host for Host header</td>
+</tr>
+<tr>
+<td><code>--cookies</code></td>
+<td></td>
+<td>Fetch and include cookies</td>
+</tr>
+<tr>
+<td><code>-d, --delay</code></td>
+<td>0</td>
+<td>Delay between requests in milliseconds</td>
+</tr>
+<tr>
+<td><code>-j, --concurrency</code></td>
+<td>1</td>
+<td>Number of URLs to scan concurrently</td>
+</tr>
+<tr>
+<td><code>-x, --proxy</code></td>
+<td></td>
+<td>HTTP proxy URL (e.g., <code>http://127.0.0.1:8080</code>)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="detection">Detection</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-c, --checks</code></td>
+<td>all</td>
+<td>Checks to run (comma-separated)</td>
+</tr>
+<tr>
+<td><code>-1, --exit-first</code></td>
+<td></td>
+<td>Stop after first vulnerability</td>
+</tr>
+<tr>
+<td><code>--fingerprint</code></td>
+<td></td>
+<td>Enable proxy fingerprinting</td>
+</tr>
+<tr>
+<td><code>--fuzz</code></td>
+<td></td>
+<td>Enable mutation-based fuzzing</td>
+</tr>
+<tr>
+<td><code>--fuzz-seed</code></td>
+<td>42</td>
+<td>Mutation seed for reproducibility</td>
+</tr>
+<tr>
+<td><code>--max-payloads</code></td>
+<td></td>
+<td>Maximum payloads to test per check type</td>
+</tr>
+<tr>
+<td><code>--baseline-count</code></td>
+<td>3</td>
+<td>Number of baseline requests for timing measurement</td>
+</tr>
+</tbody>
+</table>
+<p>Available checks: <code>cl-te</code>, <code>te-cl</code>, <code>te-te</code>, <code>h2c</code>, <code>h2</code>, <code>cl-edge</code></p>
+<h2 id="output">Output</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-o, --output</code></td>
+<td></td>
+<td>Save results to file</td>
+</tr>
+<tr>
+<td><code>-f, --format</code></td>
+<td>plain</td>
+<td>Output format: <code>plain</code> or <code>json</code></td>
+</tr>
+<tr>
+<td><code>-V, --verbose</code></td>
+<td></td>
+<td>Enable detailed logging</td>
+</tr>
+<tr>
+<td><code>-q, --quiet</code></td>
+<td></td>
+<td>Quiet mode (only show vulnerabilities)</td>
+</tr>
+<tr>
+<td><code>--export-payloads</code></td>
+<td></td>
+<td>Export vulnerable payloads to directory</td>
+</tr>
+<tr>
+<td><code>--no-color</code></td>
+<td></td>
+<td>Disable colored output</td>
+</tr>
+</tbody>
+</table>
+<h2 id="exploitation">Exploitation</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-e, --exploit</code></td>
+<td></td>
+<td>Exploit types (comma-separated)</td>
+</tr>
+<tr>
+<td><code>--exploit-ports</code></td>
+<td>22,80,443,8080,3306</td>
+<td>Ports to test</td>
+</tr>
+<tr>
+<td><code>--exploit-wordlist</code></td>
+<td></td>
+<td>Wordlist for path-fuzz</td>
+</tr>
+</tbody>
+</table>
+<p>Available exploits: <code>localhost-access</code>, <code>path-fuzz</code></p>
+<h2 id="examples">Examples</h2>
+<pre><code class="language-bash hljs"># Full scan with fingerprinting and fuzzing
+smugglex --fingerprint --fuzz https://target.com
+
+# Custom headers and timeout
+smugglex -H &quot;Authorization: Bearer token&quot; -t 15 https://target.com
+
+# Route through a proxy (e.g., Burp Suite)
+smugglex -x http://127.0.0.1:8080 https://target.com
+
+# Quick scan with limited payloads
+smugglex --max-payloads 10 https://target.com
+
+# Quiet mode — only show vulnerabilities
+smugglex -q https://target.com
+
+# Adjust baseline measurements for noisy networks
+smugglex --baseline-count 5 https://target.com
+
+# Exploit with custom ports
+smugglex -e localhost-access --exploit-ports 80,8080,9090 https://target.com
+</code></pre>
+
+    <div class="docs-footer">
+      <p>smugglex - HTTP Request Smuggling Scanner</p>
+      <p>
+        <a href="https://www.hahwul.com" target="_blank" rel="noopener"><img src="https://smugglex.hahwul.com/images/hahwul.webp" class="hahwul-img" alt="hahwul.com"></a>
+      </p>
+    </div>
+  </main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
+<script src="https://smugglex.hahwul.com/js/search.js"></script>
+<script src="https://smugglex.hahwul.com/js/toc.js"></script>
+</body>
+</html>
+  <aside class="docs-toc" id="docsToc">
+    <div class="toc-title">On this page</div>
+    <nav id="tocNav"></nav>
+  </aside>

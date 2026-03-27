@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Integrating smugglex with other tools">
+  <title>Pipeline - smugglex</title>
+  <meta property="og:title" content="Pipeline">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://smugglex.hahwul.com/advanced/pipeline/">
+<meta property="og:description" content="Integrating smugglex with other tools">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pipeline">
+<meta name="twitter:description" content="Integrating smugglex with other tools">
+  <link rel="stylesheet" href="https://smugglex.hahwul.com/css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  
+</head>
+<body data-section="advanced">
+<header class="docs-header">
+  <a href="https://smugglex.hahwul.com/" class="logo">smugglex <span>Docs</span></a>
+  <nav>
+    <a href="https://smugglex.hahwul.com/usage/">Usage</a>
+    <a href="https://smugglex.hahwul.com/checks/">Checks</a>
+    <a href="https://smugglex.hahwul.com/advanced/">Advanced</a>
+  </nav>
+  <div class="header-right">
+    <button class="search-trigger" onclick="openSearch()" title="Search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Search</span>
+      <kbd>&#8984;K</kbd>
+    </button>
+    <a href="https://github.com/hahwul/smugglex">GitHub</a>
+  </div>
+</header>
+<div class="search-overlay" id="searchOverlay" onclick="if(event.target===this)closeSearch()">
+  <div class="search-modal">
+    <div class="search-input-wrap">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="searchInput" placeholder="Search documentation..." autocomplete="off">
+      <kbd onclick="closeSearch()">ESC</kbd>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
+<div class="docs-container">
+  <aside class="docs-sidebar">
+    <a href="https://smugglex.hahwul.com/" class="sidebar-logo">
+      <img src="https://smugglex.hahwul.com/images/logo-single.png" alt="smugglex">
+    </a>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Getting Started</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/usage/">Installation</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/quick-start/">Quick Start</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/options/">Options</a></li>
+        <li><a href="https://smugglex.hahwul.com/usage/output/">Output</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Checks</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/checks/">Overview</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/cl-te/">CL.TE</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/te-cl/">TE.CL</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/te-te/">TE.TE</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/h2c/">H2C</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/h2/">H2</a></li>
+        <li><a href="https://smugglex.hahwul.com/checks/cl-edge/">CL-Edge</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Advanced</div>
+      <ul class="sidebar-links">
+        <li><a href="https://smugglex.hahwul.com/advanced/">Overview</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/fingerprinting/">Fingerprinting</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/fuzzing/">Fuzzing</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/exploitation/">Exploitation</a></li>
+        <li><a href="https://smugglex.hahwul.com/advanced/pipeline/">Pipeline</a></li>
+      </ul>
+    </div>
+  </aside>
+  <main class="docs-main">
+    <h1>Pipeline</h1>
+    <p>smugglex reads URLs from stdin, making it easy to integrate into security testing pipelines.</p>
+<h2 id="with-subfinder-httpx">With subfinder + httpx</h2>
+<pre><code class="language-bash hljs">subfinder -d target.com | httpx | smugglex
+</code></pre>
+<h2 id="from-a-file">From a file</h2>
+<pre><code class="language-bash hljs">cat urls.txt | smugglex -f json -o results.json
+</code></pre>
+<h2 id="with-custom-recon">With custom recon</h2>
+<pre><code class="language-bash hljs">echo &quot;https://target.com&quot; | smugglex -c cl-te,te-cl --fingerprint
+</code></pre>
+<h2 id="json-processing">JSON Processing</h2>
+<p>Pipe JSON output to jq for filtering:</p>
+<pre><code class="language-bash hljs">smugglex -f json https://target.com | jq '.checks[] | select(.vulnerable)'
+</code></pre>
+<h2 id="through-a-proxy">Through a Proxy</h2>
+<p>Route all traffic through an intercepting proxy like Burp Suite:</p>
+<pre><code class="language-bash hljs">cat urls.txt | smugglex -x http://127.0.0.1:8080
+</code></pre>
+<h2 id="cicd-integration">CI/CD Integration</h2>
+<p>Use quiet mode and JSON output for automated security checks:</p>
+<pre><code class="language-bash hljs">smugglex -q -f json -o report.json https://staging.example.com
+# Process report.json in your pipeline
+</code></pre>
+<h2 id="fast-scan-for-large-target-lists">Fast Scan for Large Target Lists</h2>
+<p>Limit payloads per check type and increase concurrency for faster scans:</p>
+<pre><code class="language-bash hljs">cat urls.txt | smugglex -j 5 --max-payloads 20 -q
+</code></pre>
+
+    <div class="docs-footer">
+      <p>smugglex - HTTP Request Smuggling Scanner</p>
+      <p>
+        <a href="https://www.hahwul.com" target="_blank" rel="noopener"><img src="https://smugglex.hahwul.com/images/hahwul.webp" class="hahwul-img" alt="hahwul.com"></a>
+      </p>
+    </div>
+  </main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
+<script src="https://smugglex.hahwul.com/js/search.js"></script>
+<script src="https://smugglex.hahwul.com/js/toc.js"></script>
+</body>
+</html>
+  <aside class="docs-toc" id="docsToc">
+    <div class="toc-title">On this page</div>
+    <nav id="tocNav"></nav>
+  </aside>
