@@ -22,7 +22,7 @@ jobs:
           install: |
             system "cargo build --release"
             bin.install "target/release/smugglex"
-          test: system "{bin}/smugglex", "-V"
+          test: system "#{bin}/smugglex", "-V"
           update_readme_table: false
           skip_commit: false
           debug: false
