@@ -21,14 +21,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: wow-actions/contributors-list@v1.2.1
         with:
-          GITHUB_TOKEN: ${{ secrets.SMUGGLEX_PUBLISH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           round: false
           includeBots: false
           svgPath: docs/static/images/CONTRIBUTORS.svg
           noCommit: true
       - uses: peter-evans/create-pull-request@v8.1.1
         with:
-          token: ${{ secrets.SMUGGLEX_PUBLISH_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: update contributors"
           title: "chore: update contributors"
           body: Automated update of `docs/static/images/CONTRIBUTORS.svg`.
