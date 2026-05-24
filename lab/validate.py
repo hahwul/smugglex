@@ -305,7 +305,7 @@ SCENARIOS: list[Scenario] = [
         "FP_intermittent_504",
         fp_intermittent_504,
         expected_vulnerable=False,
-        notes="~30% transient 504s; strict-majority confirmation must suppress",
+        notes="~5% transient 504s; strict-majority confirmation must suppress",
     ),
     # Positives (must flag)
     Scenario(
