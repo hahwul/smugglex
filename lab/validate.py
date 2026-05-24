@@ -329,14 +329,10 @@ def run_smugglex_against(port: int) -> dict:
         "cl-te",
         "--timeout",
         "6",
-        # Cap payload count: FP scenarios that get repeatedly FP-rejected via
-        # control comparison would otherwise iterate through every TE variation
-        # and blow the harness budget. 5 is enough to verify the rejection
-        # behavior triggers on the canonical CL.TE shape.
-        "--max-payloads",
-        "5",
         f"http://127.0.0.1:{port}/",
     ]
+    # No --max-payloads cap: with R10 consecutive-FP early termination, FP
+    # scenarios that previously needed the cap should now self-abort.
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     out = proc.stdout
     start = out.find("{")

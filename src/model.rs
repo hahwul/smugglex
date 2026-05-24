@@ -44,6 +44,13 @@ pub struct CheckResult {
     /// corroborate manually.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detection_signals: Vec<String>,
+    /// Diagnostic notes about the scan run itself, distinct from
+    /// vulnerability evidence. Currently used to record early-termination
+    /// reasons such as "early_termination:consecutive_fp_rejections=3",
+    /// emitted when the check was abandoned because the backend repeatedly
+    /// hit the control-based FP rule for this payload shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
 }
 
 /// Fingerprint information for JSON output

@@ -44,6 +44,13 @@ pub const CONTROL_BODY_MIN_BYTES: usize = 32;
 /// detect proxy↔backend desync that persists past the attack — the classic
 /// "second-request" smuggling signature.
 pub const FOLLOWUP_PROBE_COUNT: usize = 3;
+/// When this many consecutive payloads in the same check all detect AND get
+/// rejected by the control-FP rule, abandon the rest of the check. The
+/// backend is producing the same shape-dependent anomaly for every payload
+/// variant, so further iteration is wasted scan time and a strong signal
+/// that the responses are not smuggling-induced. Recorded as a `diagnostics`
+/// note on the CheckResult.
+pub const CONSECUTIVE_FP_REJECTIONS_LIMIT: usize = 3;
 
 /// Parameters for running vulnerability checks
 pub struct CheckParams<'a> {
@@ -821,6 +828,7 @@ fn build_check_result(
     )>,
     timing_threshold: u128,
     baseline_noisy: bool,
+    diagnostics: Vec<String>,
 ) -> (CheckResult, Option<(usize, String)>) {
     if let Some((idx, payload, info, control, followup)) = vulnerability {
         let confidence = compute_confidence(&info, timing_threshold, baseline_noisy);
@@ -846,6 +854,7 @@ fn build_check_result(
             payload: Some(payload.clone()),
             confidence: Some(confidence),
             detection_signals,
+            diagnostics,
         };
         (result, Some((idx, payload)))
     } else {
@@ -861,6 +870,7 @@ fn build_check_result(
             payload: None,
             confidence: None,
             detection_signals: Vec::new(),
+            diagnostics,
         };
         (result, None)
     }
@@ -944,6 +954,12 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
         Option<FollowupObservation>,
     )> = None;
 
+    // Track consecutive control-FP rejections so we can abandon the check if
+    // the backend produces the same shape-dependent anomaly for every
+    // variant — that's a strong signal the responses are not smuggling.
+    let mut consecutive_fp_rejections: usize = 0;
+    let mut early_termination: Option<String> = None;
+
     for (i, attack_request) in params.attack_requests.iter().enumerate() {
         if params.delay > 0 && i > 0 {
             tokio::time::sleep(Duration::from_millis(params.delay)).await;
@@ -1026,6 +1042,22 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                                 control.duration.as_millis(),
                             );
                         }
+                        consecutive_fp_rejections += 1;
+                        if consecutive_fp_rejections >= CONSECUTIVE_FP_REJECTIONS_LIMIT {
+                            early_termination = Some(format!(
+                                "early_termination:consecutive_fp_rejections={}",
+                                consecutive_fp_rejections
+                            ));
+                            if params.verbose {
+                                println!(
+                                    "  {} {} abandoning check after {} consecutive control-FP rejections",
+                                    "[*]".cyan(),
+                                    params.check_name,
+                                    consecutive_fp_rejections,
+                                );
+                            }
+                            break;
+                        }
                         continue;
                     }
 
@@ -1037,9 +1069,17 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                         followup_observation,
                     ));
                     break;
+                } else {
+                    // Initial detection didn't confirm — payload was not a
+                    // shape-dependent FP, so this run does not contribute to
+                    // the consecutive-rejection streak.
+                    consecutive_fp_rejections = 0;
                 }
             }
-            Ok(None) => { /* Not vulnerable with this payload, continue */ }
+            Ok(None) => {
+                // No detection signal at all → reset the streak.
+                consecutive_fp_rejections = 0;
+            }
             Err(e) => {
                 if params.verbose {
                     println!(
@@ -1054,6 +1094,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
         }
     }
 
+    let diagnostics: Vec<String> = early_termination.into_iter().collect();
     let (result, exported) = build_check_result(
         params.check_name,
         normal_status,
@@ -1061,6 +1102,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
         vulnerability_info,
         timing_threshold,
         baseline_noisy,
+        diagnostics,
     );
 
     if let (Some((payload_index, payload)), Some(export_dir)) = (exported, params.export_dir)
@@ -1291,6 +1333,17 @@ mod tests {
             is_connection_timeout: false,
         };
         assert!(!control_indicates_false_positive(&attack, &control, None));
+    }
+
+    #[test]
+    fn consecutive_fp_rejections_limit_constant() {
+        // Document the limit so future tuning is intentional. Value chosen
+        // small enough to abandon noisy backends quickly but large enough
+        // that a few real noisy retries don't trigger early termination.
+        const _: () = assert!(
+            CONSECUTIVE_FP_REJECTIONS_LIMIT >= 2,
+            "limit should require at least 2 consecutive rejections"
+        );
     }
 
     #[test]

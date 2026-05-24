@@ -337,6 +337,7 @@ fn test_check_result_vulnerable_state() {
         payload: None,
         confidence: None,
         detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
     };
 
     assert!(result.vulnerable);
@@ -359,6 +360,7 @@ fn test_check_result_not_vulnerable_state() {
         payload: None,
         confidence: None,
         detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
     };
 
     assert!(!result.vulnerable);
@@ -1837,6 +1839,107 @@ async fn test_method_matched_baseline_suppresses_post_only_slowness() {
     assert!(
         !check_result.vulnerable,
         "POST-intrinsic slowness must be absorbed by method-matched baseline, not flagged"
+    );
+}
+
+/// Consecutive FP-rejection early-termination: a backend where every
+/// TE-carrying request slows uniformly (control comparison rejects each
+/// one) must short-circuit the check after N consecutive control-FP
+/// rejections. The check result records the reason in `diagnostics` and
+/// the scan does not iterate through every payload variation.
+#[tokio::test]
+async fn test_consecutive_fp_rejections_short_circuit_check() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n_read = socket.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n_read]).to_ascii_lowercase();
+
+                    // Slow on any request that carries a body (TE or non-zero
+                    // CL). CL:0 baselines and bare GETs are fast. Each TE
+                    // payload variant therefore detects + is rejected via
+                    // control timing similarity.
+                    let has_body = req.contains("transfer-encoding")
+                        || req.lines().any(|l| {
+                            let lt = l.trim_start();
+                            lt.starts_with("content-length:")
+                                && !lt
+                                    .trim_start_matches("content-length:")
+                                    .trim()
+                                    .starts_with('0')
+                        });
+                    if has_body {
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                    }
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    // Provide many payload variants so iteration would be very expensive
+    // without early termination. Each is a CL.TE-shaped TE payload.
+    let attack_requests: Vec<String> = (0..20)
+        .map(|i| {
+            format!(
+                "POST /p{} HTTP/1.1\r\nHost: {}\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG",
+                i, host
+            )
+        })
+        .collect();
+
+    let start = std::time::Instant::now();
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 6,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+    let elapsed = start.elapsed();
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        !check_result.vulnerable,
+        "Uniform slow-on-body backend must be rejected as FP"
+    );
+    assert!(
+        check_result
+            .diagnostics
+            .iter()
+            .any(|d| d.starts_with("early_termination:consecutive_fp_rejections")),
+        "Expected early_termination diagnostic, got: {:?}",
+        check_result.diagnostics
+    );
+    // Sanity: the entire 20-payload sweep would take ~5 min without early
+    // termination. Capping at 60s gives margin while catching regressions
+    // where the limit stops being honored.
+    assert!(
+        elapsed.as_secs() < 60,
+        "early termination should keep the check well under 60s, got {:?}",
+        elapsed
     );
 }
 

@@ -24,6 +24,7 @@ fn test_save_results_to_file_creates_json() {
         payload: Some("test payload".to_string()),
         confidence: None,
         detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
     }];
 
     let result = save_results_to_file(output_path, "http://example.com", "GET", results, &None);
@@ -66,6 +67,7 @@ fn test_save_results_to_file_with_fingerprint() {
         payload: None,
         confidence: None,
         detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
     }];
 
     let result = save_results_to_file(

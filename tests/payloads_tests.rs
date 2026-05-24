@@ -117,6 +117,7 @@ fn test_check_result_serialization() {
         payload: None,
         confidence: None,
         detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
     };
 
     let json = serde_json::to_string(&result);
