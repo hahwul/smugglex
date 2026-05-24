@@ -17,3 +17,10 @@ build:
 
 dev:
     cargo build
+
+# End-to-end validation: runs smugglex against a set of local mock backends
+# that simulate canonical FP and TP smuggling scenarios. Requires a release
+# build (auto-built by the harness if missing).
+lab:
+    cargo build --release
+    python3 lab/validate.py

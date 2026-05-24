@@ -46,7 +46,10 @@ fn test_baseline_count_constant() {
 
 #[test]
 fn test_confirmation_retries_constant() {
-    assert_eq!(CONFIRMATION_RETRIES, 2, "Confirmation retries should be 2");
+    assert_eq!(
+        CONFIRMATION_RETRIES, 3,
+        "Confirmation retries should be 3 (strict-majority threshold)"
+    );
 }
 
 // ========== Progress Message Format Tests ==========
@@ -333,6 +336,8 @@ fn test_check_result_vulnerable_state() {
         timestamp: Utc::now().to_rfc3339(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
     };
 
     assert!(result.vulnerable);
@@ -354,6 +359,8 @@ fn test_check_result_not_vulnerable_state() {
         timestamp: Utc::now().to_rfc3339(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
     };
 
     assert!(!result.vulnerable);
@@ -1262,5 +1269,837 @@ async fn test_confirmed_vulnerability_medium_confidence() {
         check_result.confidence,
         Some(smugglex::model::Confidence::Medium),
         "Timing-only anomaly should yield Medium confidence"
+    );
+}
+
+// ========== Additional FP/FN Reduction Tests ==========
+
+/// Single transient 504 in baseline should NOT disable the status-code signal.
+/// (Majority of baseline is still 200, so 504 attack remains a smuggling signal.)
+#[tokio::test]
+async fn test_single_baseline_504_does_not_disable_signal() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let count = request_count.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    // Baseline 1 = 504 (single spurious), baseline 2,3 = 200 OK.
+                    // Attack + confirmations (n >= 4) = 504.
+                    let response = if n == 1 || n > DEFAULT_BASELINE_COUNT {
+                        "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n"
+                    } else {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!"
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(
+        check_result.vulnerable,
+        "A single transient 504 in baseline should not suppress detection"
+    );
+}
+
+/// `baseline_count: 0` must not panic; it should be clamped to a single baseline probe.
+#[tokio::test]
+async fn test_baseline_count_zero_does_not_panic() {
+    let (host, port, handle) = start_normal_server().await;
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", host)];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: 0,
+    })
+    .await;
+
+    handle.abort();
+    assert!(
+        result.is_ok(),
+        "baseline_count=0 must be clamped, not panic"
+    );
+}
+
+/// Confirmation requires strict majority (>N/2) for status/timing signals.
+/// With 3 retries: only 1 of 3 reproducing must NOT confirm.
+#[tokio::test]
+async fn test_minority_confirmation_not_flagged() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let count = request_count.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    // Baseline 1..=3: 200 OK
+                    // First attack (n=4): 504  -> initial detection
+                    // Confirmations (n=5,6,7): only n=5 reproduces 504; n=6,7 return 200
+                    // That's 1/3 reproduced -> minority -> NOT confirmed.
+                    let response = if n <= DEFAULT_BASELINE_COUNT {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!"
+                    } else if n == DEFAULT_BASELINE_COUNT + 1 || n == DEFAULT_BASELINE_COUNT + 2 {
+                        "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n"
+                    } else {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!"
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(
+        !check_result.vulnerable,
+        "Minority reproduction (1/3) must not confirm vulnerability"
+    );
+}
+
+// ========== Differential Control Comparison Tests ==========
+
+/// Mock server that is uniformly slow on every request after baseline,
+/// regardless of whether the request carries smuggling artifacts.
+/// This simulates a backend with naturally slow POST handling — the canonical
+/// "slow heavy POST" false-positive scenario.
+async fn start_uniformly_slow_post_server() -> (String, u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let count = request_count.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let _ = socket.read(&mut buf).await;
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    // Baseline GETs (1..=3) are fast.
+                    // Every post-baseline request (attack, retries, control) is slow.
+                    if n > DEFAULT_BASELINE_COUNT {
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                    }
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    (host, port, handle)
+}
+
+/// Mock server that is slow ONLY when the request carries a Transfer-Encoding
+/// header. This simulates a real smuggling-vulnerable backend whose desync is
+/// triggered by the TE header, while shape-matched non-TE requests respond
+/// promptly.
+async fn start_te_specific_slow_server() -> (String, u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let count = request_count.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n_read = socket.read(&mut buf).await.unwrap_or(0);
+                    let body_str = String::from_utf8_lossy(&buf[..n_read]).to_ascii_lowercase();
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    let has_te = body_str.contains("transfer-encoding");
+                    if n > DEFAULT_BASELINE_COUNT && has_te {
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                    }
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    (host, port, handle)
+}
+
+/// FP rejection: a TE-carrying payload against a backend that is slow on EVERY
+/// POST should be rejected via differential control comparison — the stripped
+/// control also takes ~2s, proving the slowness is not caused by the smuggling
+/// artifacts.
+#[tokio::test]
+async fn test_uniform_slow_backend_rejected_via_control() {
+    let (host, port, handle) = start_uniformly_slow_post_server().await;
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    // Realistic CL.TE-style payload with Transfer-Encoding header — triggers
+    // the control-comparison codepath.
+    let attack_requests = vec![format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        !check_result.vulnerable,
+        "Uniform slow backend should be rejected as FP via control comparison"
+    );
+}
+
+/// True positive: a TE-carrying payload against a TE-specific slow backend must
+/// still be flagged — the control (no TE) responds quickly, so the comparison
+/// confirms smuggling rather than rejecting it.
+#[tokio::test]
+async fn test_te_specific_slow_backend_still_detected() {
+    let (host, port, handle) = start_te_specific_slow_server().await;
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        check_result.vulnerable,
+        "TE-specific slow backend must remain detected after control comparison"
+    );
+}
+
+/// Noise-aware threshold: a noisy baseline whose max approaches the attack
+/// timing should suppress detection — the attack must beat both the relative
+/// multiplier and the worst-baseline-plus-buffer floor.
+#[tokio::test]
+async fn test_noisy_baseline_suppresses_borderline_attack() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let count = request_count.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let _ = socket.read(&mut buf).await;
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    // Baseline: one slow (1500ms) + two fast probes. median is fast
+                    // but max=1500ms, so the noise-aware threshold is at least
+                    // 1500+500=2000ms. A 1200ms "attack" must NOT trigger.
+                    if n == 1 {
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                    } else if n > DEFAULT_BASELINE_COUNT {
+                        tokio::time::sleep(Duration::from_millis(1200)).await;
+                    }
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        !check_result.vulnerable,
+        "Borderline attack within noisy baseline range must not flag"
+    );
+}
+
+/// Body-divergence escape clause: a TE-carrying attack against a backend that
+/// is uniformly slow (would normally be rejected as FP via control timing
+/// similarity) MUST still be flagged when the attack response body differs
+/// substantially from the control body — that body change is the canonical
+/// smuggling desync signature and overrides the timing similarity rule.
+#[tokio::test]
+async fn test_body_divergence_overrides_control_timing_similarity() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n_read = socket.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n_read]).to_ascii_lowercase();
+
+                    // Backend is slow whenever the request shape carries a
+                    // non-empty body (Transfer-Encoding present, or
+                    // Content-Length != 0). CL:0 method-matched baselines run
+                    // fast, attack (TE) and control (CL=body_len padding) both
+                    // run slow — this is the scenario the body-divergence
+                    // escape clause exists for.
+                    let has_te = req.contains("transfer-encoding");
+                    let has_cl_nonzero = req.lines().any(|l| {
+                        let lt = l.trim_start();
+                        lt.starts_with("content-length:")
+                            && !lt
+                                .trim_start_matches("content-length:")
+                                .trim()
+                                .starts_with('0')
+                    });
+                    if has_te || has_cl_nonzero {
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                    }
+
+                    // TE-carrying request: small error-shaped body (simulating
+                    // backend desync where the smuggled chunk was misinterpreted).
+                    // Non-TE request (baseline / control): full normal response.
+                    let body = if has_te {
+                        "ERR: bad chunk"
+                    } else {
+                        "Hello, World! This is a normal substantial response body that exceeds the body-divergence minimum size threshold so the heuristic kicks in."
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        check_result.vulnerable,
+        "Body divergence between attack and control must escape the timing-similarity FP rule"
+    );
+    // Detection signals should record body divergence as the corroborating signal.
+    assert!(
+        check_result
+            .detection_signals
+            .iter()
+            .any(|s| s == "body_divergence_vs_control"),
+        "Expected body_divergence_vs_control in signals, got: {:?}",
+        check_result.detection_signals
+    );
+}
+
+/// Method-matched baseline: a backend where GET responses are fast but POST
+/// responses are intrinsically slow (~1.4s) must NOT flag a 1.5s POST attack —
+/// the method-matched baseline lifts the noise floor so borderline POSTs don't
+/// look anomalous against the cheap GET baseline.
+#[tokio::test]
+async fn test_method_matched_baseline_suppresses_post_only_slowness() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n_read = socket.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n_read]);
+                    let method = req.split_whitespace().next().unwrap_or("");
+                    // GET: fast. POST (and any non-GET): always ~1400ms.
+                    if !method.eq_ignore_ascii_case("GET") {
+                        tokio::time::sleep(Duration::from_millis(1400)).await;
+                    }
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    // POST attack that takes ~1400ms — same as POST baseline.
+    let attack_requests = vec![format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        !check_result.vulnerable,
+        "POST-intrinsic slowness must be absorbed by method-matched baseline, not flagged"
+    );
+}
+
+/// Consecutive FP-rejection early-termination: a backend where every
+/// TE-carrying request slows uniformly (control comparison rejects each
+/// one) must short-circuit the check after N consecutive control-FP
+/// rejections. The check result records the reason in `diagnostics` and
+/// the scan does not iterate through every payload variation.
+#[tokio::test]
+async fn test_consecutive_fp_rejections_short_circuit_check() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n_read = socket.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n_read]).to_ascii_lowercase();
+
+                    // Slow on any request that carries a body (TE or non-zero
+                    // CL). CL:0 baselines and bare GETs are fast. Each TE
+                    // payload variant therefore detects + is rejected via
+                    // control timing similarity.
+                    let has_body = req.contains("transfer-encoding")
+                        || req.lines().any(|l| {
+                            let lt = l.trim_start();
+                            lt.starts_with("content-length:")
+                                && !lt
+                                    .trim_start_matches("content-length:")
+                                    .trim()
+                                    .starts_with('0')
+                        });
+                    if has_body {
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                    }
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    // Provide many payload variants so iteration would be very expensive
+    // without early termination. Each is a CL.TE-shaped TE payload.
+    let attack_requests: Vec<String> = (0..20)
+        .map(|i| {
+            format!(
+                "POST /p{} HTTP/1.1\r\nHost: {}\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG",
+                i, host
+            )
+        })
+        .collect();
+
+    let start = std::time::Instant::now();
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 6,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+    let elapsed = start.elapsed();
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        !check_result.vulnerable,
+        "Uniform slow-on-body backend must be rejected as FP"
+    );
+    assert!(
+        check_result
+            .diagnostics
+            .iter()
+            .any(|d| d.starts_with("early_termination:consecutive_fp_rejections")),
+        "Expected early_termination diagnostic, got: {:?}",
+        check_result.diagnostics
+    );
+    // Sanity: the entire 20-payload sweep would take ~5 min without early
+    // termination. Capping at 60s gives margin while catching regressions
+    // where the limit stops being honored.
+    assert!(
+        elapsed.as_secs() < 60,
+        "early termination should keep the check well under 60s, got {:?}",
+        elapsed
+    );
+}
+
+/// Post-attack follow-up GET divergence: the mock backend changes its baseline
+/// GET response shape AFTER the attack (simulating a poisoned proxy↔backend
+/// channel). The detection must record `followup_divergence` and survive even
+/// when timing/body/header similarity would otherwise let the FP rule fire.
+#[tokio::test]
+async fn test_followup_divergence_signal_recorded() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let count = request_count.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n_read = socket.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n_read]).to_ascii_lowercase();
+                    let has_te = req.contains("transfer-encoding");
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    // Baseline GETs return normal substantial body.
+                    // TE-carrying attack: slow + small body (desync signature).
+                    // Follow-up GETs (after the attack window) return a
+                    // significantly different body — simulating a backend
+                    // whose connection state was poisoned by the smuggled
+                    // prefix.
+                    //
+                    // Request order (POST attack triggers R8 method-matched
+                    // POST baseline before the attack loop):
+                    //   1..=3   GET baseline probes
+                    //   4..=6   method-matched POST baselines (CL:0, no TE)
+                    //   7       attack (with TE)
+                    //   8..=10  3 confirmation retries (with TE)
+                    //  11..=12  2 differential control samples (POST padded)
+                    //  13..=15  3 follow-up GETs (post-desync window)
+                    let is_followup = (13..=15).contains(&n);
+                    if has_te {
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                        let body = "ERR";
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                    } else if is_followup {
+                        // Post-desync: body diverges substantially from baseline.
+                        let body = "DESYNC-MARKER-LONG-RESPONSE-PAYLOAD-SUFFICIENT-FOR-DIVERGENCE";
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                    } else {
+                        let body = "Hello, World!";
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                    }
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(
+        check_result.vulnerable,
+        "Vulnerability with follow-up desync must be reported"
+    );
+    assert!(
+        check_result
+            .detection_signals
+            .iter()
+            .any(|s| s.starts_with("followup_divergence")),
+        "Expected followup_divergence signal, got: {:?}",
+        check_result.detection_signals
+    );
+}
+
+/// A confirmed timing-only detection must record its signals so users can audit.
+#[tokio::test]
+async fn test_detection_signals_populated_for_timing_only() {
+    let (host, port, handle) = start_slow_server().await;
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "TE.CL",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests,
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+    let check_result = result.unwrap();
+    assert!(check_result.vulnerable);
+    assert!(
+        !check_result.detection_signals.is_empty(),
+        "Detection signals must be populated for any vulnerability"
+    );
+    assert!(
+        check_result
+            .detection_signals
+            .iter()
+            .any(|s| s.starts_with("timing_anomaly")),
+        "Timing-only detection must record timing_anomaly signal, got: {:?}",
+        check_result.detection_signals
     );
 }
