@@ -37,6 +37,13 @@ pub struct CheckResult {
     /// Confidence level of the detection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<Confidence>,
+    /// Concrete signals that contributed to the detection (e.g.,
+    /// "status_504", "timing_anomaly:3.5x", "body_divergence_vs_control",
+    /// "header_divergence_vs_control:2", "extreme_timing"). Empty when not
+    /// vulnerable. Lets users audit *why* a finding was reported and
+    /// corroborate manually.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detection_signals: Vec<String>,
 }
 
 /// Fingerprint information for JSON output

@@ -30,6 +30,7 @@ fn create_test_check_result(
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
     }
 }
 
@@ -147,6 +148,7 @@ fn test_check_result_zero_duration() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
     };
 
     assert_eq!(result.normal_duration_ms, 0);
@@ -167,6 +169,7 @@ fn test_check_result_special_characters() {
         timestamp: "2024-01-01T12:00:00+00:00".to_string(),
         payload: None,
         confidence: Some(Confidence::High),
+        detection_signals: Vec::new(),
     };
 
     let json = serde_json::to_string(&result).expect("Should serialize");
@@ -189,6 +192,7 @@ fn test_check_result_serialization_vulnerable() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: Some(Confidence::Medium),
+        detection_signals: Vec::new(),
     };
 
     let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -235,6 +239,7 @@ fn test_check_result_clone() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: Some(Confidence::High),
+        detection_signals: Vec::new(),
     };
 
     let cloned = result.clone();
@@ -258,6 +263,7 @@ fn test_scan_results_creation() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: Some(Confidence::High),
+        detection_signals: Vec::new(),
     };
 
     let check2 = CheckResult {
@@ -271,6 +277,7 @@ fn test_scan_results_creation() {
         timestamp: "2024-01-01T12:00:01Z".to_string(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
     };
 
     let scan_results = ScanResults {
@@ -301,6 +308,7 @@ fn test_scan_results_serialization() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: Some(Confidence::High),
+        detection_signals: Vec::new(),
     };
 
     let scan_results = ScanResults {
@@ -380,6 +388,7 @@ fn test_scan_results_multiple_checks() {
             timestamp: "2024-01-01T12:00:00Z".to_string(),
             payload: None,
             confidence: Some(Confidence::High),
+            detection_signals: Vec::new(),
         },
         CheckResult {
             check_type: "TE.CL".to_string(),
@@ -392,6 +401,7 @@ fn test_scan_results_multiple_checks() {
             timestamp: "2024-01-01T12:00:01Z".to_string(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         },
         CheckResult {
             check_type: "TE.TE".to_string(),
@@ -404,6 +414,7 @@ fn test_scan_results_multiple_checks() {
             timestamp: "2024-01-01T12:00:02Z".to_string(),
             payload: None,
             confidence: Some(Confidence::Low),
+            detection_signals: Vec::new(),
         },
     ];
 
@@ -437,6 +448,7 @@ fn test_check_result_different_check_types() {
             timestamp: "2024-01-01T12:00:00Z".to_string(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         };
 
         assert_eq!(result.check_type, check_type);
@@ -457,6 +469,7 @@ fn test_check_result_timeout_scenarios() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: Some(Confidence::High),
+        detection_signals: Vec::new(),
     };
 
     assert!(result1.attack_status.as_ref().unwrap().contains("504"));
@@ -473,6 +486,7 @@ fn test_check_result_timeout_scenarios() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: Some(Confidence::Low),
+        detection_signals: Vec::new(),
     };
 
     assert_eq!(
@@ -497,6 +511,7 @@ fn test_payload_stored_in_vulnerable_result() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: Some(payload_content.to_string()),
         confidence: Some(Confidence::Medium),
+        detection_signals: Vec::new(),
     };
 
     assert!(result.vulnerable);
@@ -518,6 +533,7 @@ fn test_payload_is_none_for_non_vulnerable() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
     };
 
     assert!(!result.vulnerable);
@@ -538,6 +554,7 @@ fn test_payload_serialization_with_payload() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: Some("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n".to_string()),
         confidence: Some(Confidence::Low),
+        detection_signals: Vec::new(),
     };
 
     let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -561,6 +578,7 @@ fn test_payload_serialization_without_payload() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
     };
 
     let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -587,6 +605,7 @@ fn test_confidence_serialization() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: Some(Confidence::High),
+        detection_signals: Vec::new(),
     };
     let json = serde_json::to_string(&result).expect("Failed to serialize");
     assert!(json.contains("\"confidence\":\"high\""));
@@ -594,6 +613,7 @@ fn test_confidence_serialization() {
     // Test Medium
     let result = CheckResult {
         confidence: Some(Confidence::Medium),
+        detection_signals: Vec::new(),
         ..result.clone()
     };
     let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -602,6 +622,7 @@ fn test_confidence_serialization() {
     // Test Low
     let result = CheckResult {
         confidence: Some(Confidence::Low),
+        detection_signals: Vec::new(),
         ..result
     };
     let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -621,6 +642,7 @@ fn test_confidence_skip_when_none() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
     };
     let json = serde_json::to_string(&result).expect("Failed to serialize");
     assert!(!json.contains("confidence"));

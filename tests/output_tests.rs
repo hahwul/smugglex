@@ -23,6 +23,7 @@ fn test_save_results_to_file_creates_json() {
         timestamp: "2024-01-01T00:00:00Z".to_string(),
         payload: Some("test payload".to_string()),
         confidence: None,
+        detection_signals: Vec::new(),
     }];
 
     let result = save_results_to_file(output_path, "http://example.com", "GET", results, &None);
@@ -64,6 +65,7 @@ fn test_save_results_to_file_with_fingerprint() {
         timestamp: "2024-01-01T00:00:00Z".to_string(),
         payload: None,
         confidence: None,
+        detection_signals: Vec::new(),
     }];
 
     let result = save_results_to_file(
@@ -92,8 +94,7 @@ fn test_save_results_to_file_empty_results() {
     let output_file = temp_dir.join("smugglex_test_output_empty.json");
     let output_path = output_file.to_str().unwrap();
 
-    let result =
-        save_results_to_file(output_path, "http://example.com", "GET", Vec::new(), &None);
+    let result = save_results_to_file(output_path, "http://example.com", "GET", Vec::new(), &None);
     assert!(result.is_ok());
 
     let content = fs::read_to_string(output_path).unwrap();

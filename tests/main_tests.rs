@@ -207,6 +207,7 @@ async fn test_output_file_json_structure() {
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         }],
     };
 
@@ -267,6 +268,7 @@ async fn test_vulnerable_count_calculation() {
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         },
         CheckResult {
             check_type: "TE.CL".to_string(),
@@ -279,6 +281,7 @@ async fn test_vulnerable_count_calculation() {
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         },
         CheckResult {
             check_type: "H2C".to_string(),
@@ -291,6 +294,7 @@ async fn test_vulnerable_count_calculation() {
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         },
     ];
 
@@ -632,6 +636,7 @@ async fn test_results_aggregation() {
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         },
         CheckResult {
             check_type: "TE.CL".to_string(),
@@ -644,6 +649,7 @@ async fn test_results_aggregation() {
             timestamp: Utc::now().to_rfc3339(),
             payload: None,
             confidence: None,
+            detection_signals: Vec::new(),
         },
     ];
 

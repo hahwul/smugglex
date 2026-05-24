@@ -81,6 +81,13 @@ pub fn log_plain_results(results: &[CheckResult], vulnerable_count: usize) {
                     attack_ms
                 );
             }
+            if !result.detection_signals.is_empty() {
+                println!(
+                    "{} {}",
+                    "Signals:".bold(),
+                    result.detection_signals.join(", ")
+                );
+            }
             if let Some(ref payload) = result.payload {
                 println!("\n{}", "HTTP Raw Request:".bold());
                 println!("{}", "─".repeat(60).dimmed());

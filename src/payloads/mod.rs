@@ -42,9 +42,12 @@ pub fn format_cookies(cookies: &[String]) -> String {
     }
 }
 
-/// Helper function to check if a payload contains a Transfer-Encoding related header
-/// This handles various obfuscation techniques including control characters in header names
-/// Note: This is only used in tests to verify payload generation, not in production code
+/// Helper function to check if a payload contains a Transfer-Encoding related header.
+/// Handles obfuscation techniques including control characters in header names.
+///
+/// Exposed for integration tests in `tests/payloads_tests.rs` which assert that
+/// generated payloads carry a recognizable TE header. Not used by the scanning
+/// pipeline itself.
 pub fn contains_te_header_pattern(payload: &str) -> bool {
     let payload_lower = payload.to_lowercase();
 
