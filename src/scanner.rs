@@ -689,7 +689,10 @@ fn control_indicates_false_positive(
 
 /// Confirm a detected vulnerability by retrying CONFIRMATION_RETRIES times.
 /// - Connection-level timeouts: ALL retries must reproduce (strict; networks are noisy).
-/// - Status/timing signals: strict majority (>N/2) must reproduce.
+/// - Status-only (408/504 without timing anomaly): ALL retries must reproduce —
+///   intermittent gateway-timeout responses are a common non-smuggling cause
+///   and would otherwise pass strict-majority on a single fluke.
+/// - Status+timing or timing-only signals: strict majority (>N/2) must reproduce.
 async fn confirm_vulnerability(
     params: &PayloadCheckParams<'_>,
     initial: &VulnerabilityInfo,
@@ -701,7 +704,11 @@ async fn confirm_vulnerability(
         }
     }
 
-    let confirmed = if initial.is_connection_timeout {
+    let initial_is_status_only = !initial.is_connection_timeout
+        && matches!(initial.status_code, Some(408) | Some(504))
+        && initial.duration.as_millis() <= params.timing_threshold;
+
+    let confirmed = if initial.is_connection_timeout || initial_is_status_only {
         durations.len() == CONFIRMATION_RETRIES
     } else {
         durations.len() * 2 > CONFIRMATION_RETRIES

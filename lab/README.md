@@ -39,7 +39,10 @@ cl-te --max-payloads 5 http://127.0.0.1:<port>/` against each and compares:
 | `FP_slow_post_uniform` | All POSTs ~1.4 s, GETs fast | Method-matched POST baseline lifting the threshold |
 | `FP_uniform_504` | Everything returns 504 | Baseline-majority-timeout suppression of status signal |
 | `FP_noisy_baseline` | One slow (1.5 s) baseline GET, borderline 1.2 s POSTs | Noise-aware threshold (`max + buffer`) |
-| `FP_heavy_post` | POSTs with body slow, CL:0 POSTs and GETs fast | Differential control comparison rejecting heavy-shape FPs |
+| `FP_heavy_post` | POSTs with body slow, CL:0 POSTs and GETs fast | Differential control comparison + consecutive-FP early termination |
+| `FP_waf_blocks_te` | WAF returns 403 on TE shapes, 200 otherwise | Verifies the scanner does not over-interpret WAF-shaped status/body differences as smuggling |
+| `FP_natural_body_jitter` | Every response body varies ±4% (480–520 B) within similarity threshold | Body/follow-up divergence heuristics do not over-trigger on natural backend variability |
+| `FP_intermittent_504` | ~5% of post-baseline requests return 504 (realistic flake rate) | Strict-majority confirmation + all-retries-for-status-only suppress sparse intermittent failures. Pathologically high flake rates (≥20%) remain a known limitation. |
 
 ### True positives (must flag)
 

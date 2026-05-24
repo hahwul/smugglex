@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import random
 import socket
 import subprocess
 import sys
@@ -172,6 +173,61 @@ def tp_body_divergence(sock, req, n):
         sock.sendall(http_response(NORMAL_BODY))
 
 
+# ---- Additional realistic FP scenarios ----
+
+
+def fp_waf_blocks_te(sock, req, n):
+    """A WAF in front of a healthy backend rejects any request carrying
+    Transfer-Encoding with a small 403 body. Non-TE shapes pass through to
+    the backend and return the normal substantial body. Status differs (200
+    vs 403), body sizes differ — looks suspicious to a naive detector, but
+    is not desync."""
+    has_te = b"transfer-encoding" in req.lower()
+    if has_te:
+        sock.sendall(http_response(b"Forbidden by WAF", status="403 Forbidden"))
+    else:
+        sock.sendall(http_response(NORMAL_BODY))
+
+
+def fp_natural_body_jitter(sock, req, n):
+    """Backend with natural body-size jitter on every response (A/B testing,
+    server-side rendering variation, multiple cache variants). No timing
+    or status anomalies — only body size varies within ±4% of the
+    canonical NORMAL_BODY length. Validates that the body-divergence and
+    follow-up-divergence heuristics do not over-trigger on natural
+    per-request body variability inside the similarity threshold."""
+    # Deterministic jitter 480..520 B = within ~92% of 500 B (per
+    # CONTROL_BODY_DIVERGENCE_PCT=75 rule, anything ≥ 75% similar is NOT
+    # divergent). No timing/status anomalies — pure body variation.
+    jitter = (n * 7919) % 41  # 0..40
+    body = b"X" * (480 + jitter)
+    sock.sendall(http_response(body))
+
+
+def fp_intermittent_504(sock, req, n):
+    """Backend occasionally returns 504 (~5% of post-baseline requests) due
+    to realistic upstream flakiness (e.g., periodic backend GC pauses,
+    sparse upstream load spikes). The strict-majority confirmation rule +
+    all-retries-required for status-only signals must suppress detection.
+
+    NOTE: Pathologically high flake rates (≥20%) are a known limitation —
+    they can still false-confirm with low probability when retry seeds
+    align unfavorably. Distinguishing high-rate intermittent failures from
+    real status-only smuggling would require statistical sampling across
+    multiple payload variants, which conflicts with the exit-first design.
+    """
+    # Deterministic pseudo-random based on request number so the test is
+    # reproducible. ~5% post-baseline failure rate — realistic for a
+    # marginally-healthy backend, well below the false-confirmation
+    # threshold (0.05^3 = 0.0125%).
+    rng = random.Random(n * 1000003)  # noqa: S311 — deterministic, not security
+    is_failure = n > 3 and rng.random() < 0.05
+    if is_failure:
+        sock.sendall(http_response(b"Gateway timeout", status="504 Gateway Timeout"))
+    else:
+        sock.sendall(http_response(NORMAL_BODY))
+
+
 # ----------------------------- helpers -------------------------------------
 
 
@@ -231,7 +287,25 @@ SCENARIOS: list[Scenario] = [
         "FP_heavy_post",
         heavy_post_uniform,
         expected_vulnerable=False,
-        notes="all POSTs-with-body slow; control comparison must reject",
+        notes="all POSTs-with-body slow; control comparison + R10 early termination",
+    ),
+    Scenario(
+        "FP_waf_blocks_te",
+        fp_waf_blocks_te,
+        expected_vulnerable=False,
+        notes="WAF returns 403 on TE shapes; not smuggling — should not flag",
+    ),
+    Scenario(
+        "FP_natural_body_jitter",
+        fp_natural_body_jitter,
+        expected_vulnerable=False,
+        notes="natural body-size variation within similarity threshold; no anomalies",
+    ),
+    Scenario(
+        "FP_intermittent_504",
+        fp_intermittent_504,
+        expected_vulnerable=False,
+        notes="~30% transient 504s; strict-majority confirmation must suppress",
     ),
     # Positives (must flag)
     Scenario(
