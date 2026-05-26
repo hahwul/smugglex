@@ -80,4 +80,37 @@ pub struct ScanResults {
     pub fingerprint: Option<FingerprintInfo>,
     /// Results of each individual smuggling check
     pub checks: Vec<CheckResult>,
+    /// Error message if the target scan failed (e.g. connection or parsing error).
+    /// When present, `checks` will usually be empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Summary statistics for a batch of scan results.
+/// Useful for AI agents and scripts to get a quick overview without iterating.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BatchSummary {
+    /// Total number of targets that were processed (including errors)
+    pub total_targets: usize,
+    /// Number of targets on which at least one vulnerability was confirmed
+    pub vulnerable_targets: usize,
+    /// Total number of individual check runs across all targets
+    pub total_checks: usize,
+    /// Total number of checks that reported vulnerable=true
+    pub vulnerable_checks: usize,
+}
+
+/// Envelope for machine-readable (JSON) output when scanning multiple targets,
+/// or when using --json. Provides both detailed per-target results and a summary.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchScanResults {
+    /// smugglex version that produced this output
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smugglex_version: Option<String>,
+    /// ISO 8601 timestamp when the batch run completed
+    pub timestamp: String,
+    /// Per-target results (one entry per attempted target)
+    pub results: Vec<ScanResults>,
+    /// Aggregate statistics
+    pub summary: BatchSummary,
 }

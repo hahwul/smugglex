@@ -73,6 +73,10 @@ pub struct Cli {
     #[arg(help_heading = "OUTPUT", short = 'f', long = "format", default_value_t = OutputFormat::Plain)]
     pub format: OutputFormat,
 
+    /// Shorthand for --format json (machine-readable output for scripts and AI agents)
+    #[arg(help_heading = "OUTPUT", long = "json", action = clap::ArgAction::SetTrue)]
+    pub json: bool,
+
     /// Export payloads to directory when vulnerabilities are found
     #[arg(help_heading = "OUTPUT", long = "export-payloads")]
     pub export_dir: Option<String>,
@@ -171,6 +175,16 @@ impl Cli {
         }
         if let Some(ref proxy) = self.proxy {
             crate::http::set_proxy(proxy.clone());
+        }
+    }
+
+    /// Returns the effective output format, honoring both --format and the --json shorthand.
+    /// --json takes precedence for convenience in scripting/AI usage.
+    pub fn effective_format(&self) -> OutputFormat {
+        if self.json {
+            OutputFormat::Json
+        } else {
+            self.format.clone()
         }
     }
 }

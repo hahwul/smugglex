@@ -293,6 +293,7 @@ fn test_scan_results_creation() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         fingerprint: None,
         checks: vec![check1, check2],
+        error: None,
     };
 
     assert_eq!(scan_results.target, "https://example.com");
@@ -325,6 +326,7 @@ fn test_scan_results_serialization() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         fingerprint: None,
         checks: vec![check],
+        error: None,
     };
 
     let json = serde_json::to_string_pretty(&scan_results).expect("Failed to serialize");
@@ -372,6 +374,7 @@ fn test_scan_results_empty_checks() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         fingerprint: None,
         checks: vec![],
+        error: None,
     };
 
     assert_eq!(scan_results.checks.len(), 0);
@@ -435,6 +438,7 @@ fn test_scan_results_multiple_checks() {
         timestamp: "2024-01-01T12:00:00Z".to_string(),
         fingerprint: None,
         checks: checks.clone(),
+        error: None,
     };
 
     assert_eq!(scan_results.checks.len(), 3);
