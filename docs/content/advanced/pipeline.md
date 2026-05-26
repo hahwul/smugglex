@@ -41,11 +41,18 @@ cat urls.txt | smugglex -x http://127.0.0.1:8080
 
 ## CI/CD Integration
 
-Use quiet mode and JSON output for automated security checks:
+Use JSON + exit codes for reliable automation. The tool exits with:
+- `0` — no vulnerabilities
+- `1` — vulnerabilities found
+- `2` — input/usage error
 
 ```bash
-smugglex -q -f json -o report.json https://staging.example.com
-# Process report.json in your pipeline
+# Recommended for agents/CI
+smugglex -q --json -o report.json https://staging.example.com
+echo $?   # inspect exit code
+
+# Or pipe directly
+cat urls.txt | smugglex --json | jq '.summary.vulnerable_targets'
 ```
 
 ## Fast Scan for Large Target Lists

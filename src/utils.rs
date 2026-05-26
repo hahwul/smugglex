@@ -6,6 +6,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static QUIET: AtomicBool = AtomicBool::new(false);
+static MACHINE: AtomicBool = AtomicBool::new(false);
 
 /// Enable or disable quiet mode globally
 pub fn set_quiet(enabled: bool) {
@@ -15,6 +16,17 @@ pub fn set_quiet(enabled: bool) {
 /// Check if quiet mode is enabled
 pub fn is_quiet() -> bool {
     QUIET.load(Ordering::Relaxed)
+}
+
+/// Enable or disable machine mode (JSON / structured output).
+/// In machine mode, human-readable logs are suppressed or redirected to stderr.
+pub fn set_machine(enabled: bool) {
+    MACHINE.store(enabled, Ordering::Relaxed);
+}
+
+/// Check if machine mode (structured/JSON output) is active.
+pub fn is_machine() -> bool {
+    MACHINE.load(Ordering::Relaxed)
 }
 
 /// Fetch cookies from the target server
@@ -121,13 +133,43 @@ impl LogLevel {
             LogLevel::Error => "ERR".red(),
         }
     }
+
+    /// Plain (non-colored) prefix, used in machine mode where we write to stderr.
+    fn prefix_plain(&self) -> &'static str {
+        match self {
+            LogLevel::Info => "INF",
+            LogLevel::Warning => "WRN",
+            LogLevel::Error => "ERR",
+        }
+    }
 }
 
-/// Print a log message with timestamp and level prefix
+/// Print a log message with timestamp and level prefix.
+/// In machine mode (JSON output), Info is suppressed and non-Info goes to stderr
+/// so that stdout remains clean for structured data.
 pub fn log(level: LogLevel, message: &str) {
+    if is_machine() && matches!(level, LogLevel::Info) {
+        return;
+    }
     if is_quiet() && matches!(level, LogLevel::Info) {
         return;
     }
+
     let time = Local::now().format("%I:%M%p").to_string().to_uppercase();
-    println!("{} {} {}", time.dimmed(), level.prefix(), message);
+
+    if is_machine() {
+        // Machine mode: send warnings/errors to stderr without ANSI colors
+        // to avoid polluting JSON consumers.
+        match level {
+            LogLevel::Info => {
+                // Should not reach here (early return above), but be defensive.
+                eprintln!("{} {}", time, message);
+            }
+            _ => {
+                eprintln!("{} {} {}", time, level.prefix_plain(), message);
+            }
+        }
+    } else {
+        println!("{} {} {}", time.dimmed(), level.prefix(), message);
+    }
 }

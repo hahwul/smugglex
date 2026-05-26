@@ -18,36 +18,43 @@ smugglex https://target.com
 [OK] TE.TE - https://target.com
 ```
 
-## JSON
+## JSON (Machine Readable)
 
-Structured output for integration with other tools.
+Use `-f json` or `--json` for clean, structured output suitable for AI agents, scripts, jq, and CI systems.
 
 ```bash
-smugglex -f json -o results.json https://target.com
+smugglex --json https://target.com
+# or the equivalent:
+smugglex -f json https://target.com
 ```
+
+Key properties for automation:
+- **Stdout is pure JSON** — no progress bars, no log lines.
+- **Exit code** indicates findings: `0` = clean, `1` = vulnerable found, `2` = input/usage error.
+- JSON mode always emits a batch envelope with `results[]` + `summary`, even for a single target.
 
 ```json
 {
-  "target": "https://target.com",
-  "method": "POST",
-  "timestamp": "2025-01-15T10:30:00Z",
-  "fingerprint": {
-    "detected_proxy": "nginx",
-    "server": "nginx/1.24.0"
-  },
-  "checks": [
-    {
-      "check_type": "cl-te",
-      "vulnerable": true,
-      "payload_index": 3,
-      "normal_status": 200,
-      "attack_status": 200,
-      "normal_duration_ms": 45,
-      "attack_duration_ms": 5023,
-      "confidence": "high"
-    }
-  ]
+  "smugglex_version": "0.2.0",
+  "timestamp": "...",
+  "results": [
+    { "target": "...", "checks": [...] },
+    { "target": "...", "checks": [], "error": "URL parse error: ..." },
+    ...
+  ],
+  "summary": {
+    "total_targets": 12,
+    "vulnerable_targets": 3,
+    "total_checks": 84,
+    "vulnerable_checks": 5
+  }
 }
+```
+
+Write to file while keeping stdout clean:
+
+```bash
+smugglex --json -o report.json https://target.com
 ```
 
 ## Export Payloads

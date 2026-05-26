@@ -210,6 +210,7 @@ async fn test_output_file_json_structure() {
             detection_signals: Vec::new(),
             diagnostics: Vec::new(),
         }],
+        error: None,
     };
 
     let json_output = serde_json::to_string_pretty(&scan_results);
@@ -235,6 +236,7 @@ async fn test_output_file_creation() {
         timestamp: Utc::now().to_rfc3339(),
         fingerprint: None,
         checks: vec![],
+        error: None,
     };
 
     let json_output = serde_json::to_string_pretty(&scan_results).unwrap();

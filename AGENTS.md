@@ -171,6 +171,24 @@ Key dependencies and their purposes:
 pub option_name: Option<String>,
 ```
 
+### Machine-Readable / AI-Friendly Output
+- Use `OutputFormat` (already supports `Json` via `-f json` / `--json`).
+- When emitting JSON, **never write anything except the JSON document to stdout**.
+  - Use the existing `is_machine()` / `set_machine(true)` helpers (or `cli.effective_format().is_json()`).
+  - All human logs must go to stderr or be suppressed.
+- **Exit codes are part of the contract**:
+  - `0` = no vulnerabilities found across all targets
+  - `1` = at least one vulnerability found (use for agent branching / CI)
+  - `2` = usage or input error
+- For batch scans (multiple URLs or stdin), collect results first and emit a single top-level JSON document (either a bare array or an envelope with `results` + `summary`).
+- The `ScanResults` / `CheckResult` models already contain rich `detection_signals`, `confidence`, `diagnostics`, and raw `payload` — ideal for LLMs to reason about findings.
+
+Example CLI addition for shorthand:
+```rust
+#[arg(long = "json", action = clap::ArgAction::SetTrue)]
+pub json: bool,
+```
+
 ### Creating Attack Payloads
 ```rust
 pub fn get_attack_payloads(

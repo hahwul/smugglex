@@ -65,6 +65,29 @@ smugglex https://target.com -v -o results.json
 cat urls.txt | smugglex --exit-first
 ```
 
+## For AI Agents, Scripts & CI
+
+smugglex is designed to be friendly to automated usage:
+
+```bash
+# Clean JSON output (only JSON on stdout) + proper exit code
+smugglex --json https://target.com
+echo $?   # 0 = clean, 1 = vulnerable found
+
+# Batch + structured output (single valid JSON document)
+cat urls.txt | smugglex -f json -o report.json
+
+# Quiet + JSON for pipelines
+smugglex -q --json https://target.com | jq '.summary.vulnerable_targets'
+```
+
+Exit codes:
+- `0` — No vulnerabilities found
+- `1` — At least one vulnerability found
+- `2` — Usage / input error
+
+See the [Pipeline Guide](https://smugglex.hahwul.com/advanced/pipeline/) and [Output Formats](https://smugglex.hahwul.com/usage/output/) for more.
+
 ## Troubleshooting
 
 Common issues and solutions are available in the [Troubleshooting Guide](https://smugglex.hahwul.com/support/troubleshooting/).
