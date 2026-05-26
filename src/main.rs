@@ -101,10 +101,27 @@ async fn main() -> Result<()> {
         if cli.effective_format().is_json() {
             // Produce a valid (empty) JSON envelope even on input error so AI agents can parse uniformly.
             let empty_batch = build_batch_results(Vec::new(), Some(env!("CARGO_PKG_VERSION")));
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&empty_batch).unwrap_or_default()
-            );
+            match serde_json::to_string_pretty(&empty_batch) {
+                Ok(json) => println!("{}", json),
+                Err(e) => {
+                    log(
+                        LogLevel::Error,
+                        &format!("failed to serialize empty batch results: {}", e),
+                    );
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "results": [],
+                            "summary": {
+                                "total_targets": 0,
+                                "vulnerable_targets": 0,
+                                "total_checks": 0,
+                                "vulnerable_checks": 0
+                            }
+                        })
+                    );
+                }
+            }
         } else {
             eprintln!("{} No valid URLs provided", "[!]".yellow().bold());
         }
@@ -124,19 +141,25 @@ async fn main() -> Result<()> {
             for target_url in chunk {
                 let url = target_url.clone();
                 let cli_ref = cli.clone();
-                handles.push(tokio::spawn(
-                    async move { scan_one_target(url, cli_ref).await },
+                handles.push((
+                    url.clone(),
+                    tokio::spawn(async move { scan_one_target(url, cli_ref).await }),
                 ));
             }
-            for handle in handles {
+            for (target, handle) in handles {
                 match handle.await {
                     Ok(outcome) => outcomes.push(outcome),
                     Err(join_err) => {
-                        // Join error (task panicked) — surface to stderr
-                        log(
-                            LogLevel::Error,
-                            &format!("worker task failed: {}", join_err),
-                        );
+                        if !is_machine() {
+                            log(
+                                LogLevel::Error,
+                                &format!("worker task failed for {}: {}", target, join_err),
+                            );
+                        }
+                        outcomes.push(ScanOutcome::Failure {
+                            target,
+                            error: format!("worker task failed: {}", join_err),
+                        });
                     }
                 }
             }
@@ -150,6 +173,9 @@ async fn main() -> Result<()> {
 
     // Compute overall vulnerability status for exit code
     let any_vulnerable = outcomes.iter().any(|o| o.is_vulnerable());
+    let any_failures = outcomes
+        .iter()
+        .any(|o| matches!(o, ScanOutcome::Failure { .. }));
 
     // Emit results
     let json_mode = cli.effective_format().is_json();
@@ -196,6 +222,10 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
+    if any_failures {
+        std::process::exit(2);
+    }
+
     Ok(())
 }
 
@@ -230,34 +260,33 @@ fn resolve_urls(cli: &Cli) -> Result<Vec<String>> {
 async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     let start_time = std::time::Instant::now();
     let target_url = target.as_str();
+    let network_verbose = cli.verbose && !is_machine();
+
+    let scan_failure = |message: String| {
+        if !is_machine() {
+            log(
+                LogLevel::Error,
+                &format!("failed to scan {}: {}", target_url, message),
+            );
+        }
+        ScanOutcome::Failure {
+            target: target_url.to_string(),
+            error: message,
+        }
+    };
 
     let url = match Url::parse(target_url) {
         Ok(u) => u,
-        Err(e) => {
-            return ScanOutcome::Failure {
-                target: target_url.to_string(),
-                error: format!("URL parse error: {}", e),
-            };
-        }
+        Err(e) => return scan_failure(format!("URL parse error: {}", e)),
     };
 
     let host = match url.host_str() {
         Some(h) => h,
-        None => {
-            return ScanOutcome::Failure {
-                target: target_url.to_string(),
-                error: "Invalid host in URL".to_string(),
-            };
-        }
+        None => return scan_failure("Invalid host in URL".to_string()),
     };
     let port = match url.port_or_known_default() {
         Some(p) => p,
-        None => {
-            return ScanOutcome::Failure {
-                target: target_url.to_string(),
-                error: "Invalid port in URL".to_string(),
-            };
-        }
+        None => return scan_failure("Invalid port in URL".to_string()),
     };
     let path = url.path();
     let use_tls = url.scheme() == "https";
@@ -268,20 +297,24 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         log(LogLevel::Info, &format!("start scan to {}", target_url));
     }
 
-    let cookies = match fetch_cookies(host, port, path, use_tls, cli.timeout, cli.verbose).await {
-        Ok(c) => {
-            if !c.is_empty() && !is_machine() {
-                log(LogLevel::Info, &format!("found {} cookie(s)", c.len()));
+    let cookies = if cli.use_cookies {
+        match fetch_cookies(host, port, path, use_tls, cli.timeout, network_verbose).await {
+            Ok(c) => {
+                if !c.is_empty() && !is_machine() {
+                    log(LogLevel::Info, &format!("found {} cookie(s)", c.len()));
+                }
+                c
             }
-            c
-        }
-        Err(e) => {
-            // Cookie fetch failure is non-fatal for the scan itself
-            if !is_machine() {
-                log(LogLevel::Warning, &format!("cookie fetch failed: {}", e));
+            Err(e) => {
+                // Cookie fetch failure is non-fatal for the scan itself
+                if !is_machine() {
+                    log(LogLevel::Warning, &format!("cookie fetch failed: {}", e));
+                }
+                Vec::new()
             }
-            Vec::new()
         }
+    } else {
+        Vec::new()
     };
 
     // Progress bar is hidden in machine mode or when verbose (old behavior)
@@ -295,7 +328,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         if !is_machine() {
             log(LogLevel::Info, "running proxy fingerprint probe");
         }
-        match fingerprint_target(host, port, path, cli.timeout, cli.verbose, use_tls).await {
+        match fingerprint_target(host, port, path, cli.timeout, network_verbose, use_tls).await {
             Ok(fp) => {
                 if !is_machine() {
                     log(
@@ -389,7 +422,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
             path,
             attack_requests: payloads,
             timeout: cli.timeout,
-            verbose: cli.verbose,
+            verbose: network_verbose,
             use_tls,
             export_dir: cli.export_dir.as_deref(),
             current_check: i + 1,
@@ -412,6 +445,21 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                         &format!("{} check failed: {}", check_name, e),
                     );
                 }
+                results.push(CheckResult {
+                    check_type: check_name.to_string(),
+                    vulnerable: false,
+                    payload_index: None,
+                    normal_status: "CHECK_FAILED".to_string(),
+                    attack_status: None,
+                    normal_duration_ms: 0,
+                    attack_duration_ms: None,
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    payload: None,
+                    confidence: None,
+                    detection_signals: Vec::new(),
+                    diagnostics: vec![format!("check_failed: {}", e)],
+                });
+                pb.inc(1);
             }
         }
     }

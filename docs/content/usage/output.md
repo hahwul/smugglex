@@ -30,16 +30,16 @@ smugglex -f json https://target.com
 
 Key properties for automation:
 - **Stdout is pure JSON** — no progress bars, no log lines.
-- **Exit code** indicates findings: `0` = clean, `1` = vulnerable found.
-- Single target → `ScanResults` object (per-target schema).
-- Multiple targets / stdin batch → envelope with `results[]` + `summary`:
+- **Exit code** indicates findings: `0` = clean, `1` = vulnerable found, `2` = input/usage error.
+- JSON mode always emits a batch envelope with `results[]` + `summary`, even for a single target.
 
 ```json
 {
   "smugglex_version": "0.2.0",
   "timestamp": "...",
   "results": [
-    { "target": "...", "checks": [...], "error": null },
+    { "target": "...", "checks": [...] },
+    { "target": "...", "checks": [], "error": "URL parse error: ..." },
     ...
   ],
   "summary": {

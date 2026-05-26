@@ -2,9 +2,26 @@
 //!
 //! This module tests result formatting and file saving logic.
 
-use smugglex::model::{CheckResult, FingerprintInfo, ScanResults};
-use smugglex::output::save_results_to_file;
+use smugglex::model::{BatchScanResults, CheckResult, FingerprintInfo, ScanResults};
+use smugglex::output::{build_batch_results, save_batch_to_file, save_results_to_file};
 use std::fs;
+
+fn sample_check_result(check_type: &str, vulnerable: bool) -> CheckResult {
+    CheckResult {
+        check_type: check_type.to_string(),
+        vulnerable,
+        payload_index: Some(0),
+        normal_status: "HTTP/1.1 200 OK".to_string(),
+        attack_status: vulnerable.then_some("HTTP/1.1 504 Gateway Timeout".to_string()),
+        normal_duration_ms: 100,
+        attack_duration_ms: vulnerable.then_some(5000),
+        timestamp: "2024-01-01T00:00:00Z".to_string(),
+        payload: Some("test payload".to_string()),
+        confidence: None,
+        detection_signals: Vec::new(),
+        diagnostics: Vec::new(),
+    }
+}
 
 #[test]
 fn test_save_results_to_file_creates_json() {
@@ -12,20 +29,7 @@ fn test_save_results_to_file_creates_json() {
     let output_file = temp_dir.join("smugglex_test_output.json");
     let output_path = output_file.to_str().unwrap();
 
-    let results = vec![CheckResult {
-        check_type: "cl-te".to_string(),
-        vulnerable: true,
-        payload_index: Some(0),
-        normal_status: "HTTP/1.1 200 OK".to_string(),
-        attack_status: Some("HTTP/1.1 504 Gateway Timeout".to_string()),
-        normal_duration_ms: 100,
-        attack_duration_ms: Some(5000),
-        timestamp: "2024-01-01T00:00:00Z".to_string(),
-        payload: Some("test payload".to_string()),
-        confidence: None,
-        detection_signals: Vec::new(),
-        diagnostics: Vec::new(),
-    }];
+    let results = vec![sample_check_result("cl-te", true)];
 
     let result = save_results_to_file(output_path, "http://example.com", "GET", results, &None);
     assert!(result.is_ok());
@@ -55,20 +59,11 @@ fn test_save_results_to_file_with_fingerprint() {
         powered_by: None,
     });
 
-    let results = vec![CheckResult {
-        check_type: "te-cl".to_string(),
-        vulnerable: false,
-        payload_index: None,
-        normal_status: "HTTP/1.1 200 OK".to_string(),
-        attack_status: None,
-        normal_duration_ms: 50,
-        attack_duration_ms: None,
-        timestamp: "2024-01-01T00:00:00Z".to_string(),
-        payload: None,
-        confidence: None,
-        detection_signals: Vec::new(),
-        diagnostics: Vec::new(),
-    }];
+    let mut result = sample_check_result("te-cl", false);
+    result.payload_index = None;
+    result.payload = None;
+    result.normal_duration_ms = 50;
+    let results = vec![result];
 
     let result = save_results_to_file(
         output_path,
@@ -117,4 +112,66 @@ fn test_save_results_to_file_invalid_path() {
         &None,
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn test_build_batch_results_summary_counts_failures_and_vulnerabilities() {
+    let results = vec![
+        ScanResults {
+            target: "http://one.example".to_string(),
+            method: "GET".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            fingerprint: None,
+            checks: vec![
+                sample_check_result("cl-te", true),
+                sample_check_result("te-cl", false),
+            ],
+            error: None,
+        },
+        ScanResults {
+            target: "http://two.example".to_string(),
+            method: "GET".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            fingerprint: None,
+            checks: vec![],
+            error: Some("URL parse error".to_string()),
+        },
+    ];
+
+    let batch = build_batch_results(results, Some("0.2.0"));
+
+    assert_eq!(batch.summary.total_targets, 2);
+    assert_eq!(batch.summary.vulnerable_targets, 1);
+    assert_eq!(batch.summary.total_checks, 2);
+    assert_eq!(batch.summary.vulnerable_checks, 1);
+}
+
+#[test]
+fn test_save_batch_to_file_creates_parseable_json() {
+    let temp_dir = std::env::temp_dir();
+    let output_file = temp_dir.join("smugglex_test_batch_output.json");
+    let output_path = output_file.to_str().unwrap();
+
+    let batch = build_batch_results(
+        vec![ScanResults {
+            target: "http://example.com".to_string(),
+            method: "GET".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            fingerprint: None,
+            checks: vec![sample_check_result("cl-te", false)],
+            error: None,
+        }],
+        Some("0.2.0"),
+    );
+
+    let result = save_batch_to_file(&batch, output_path);
+    assert!(result.is_ok());
+
+    let content = fs::read_to_string(output_path).unwrap();
+    let parsed: BatchScanResults = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed.summary.total_targets, 1);
+    assert_eq!(parsed.results.len(), 1);
+    assert_eq!(parsed.results[0].target, "http://example.com");
+
+    fs::remove_file(output_path).ok();
 }

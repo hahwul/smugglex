@@ -241,6 +241,35 @@ fn test_format_invalid_value() {
     assert!(result.is_err(), "format should reject invalid values");
 }
 
+#[test]
+fn test_json_shorthand_flag_sets_effective_json_format() {
+    let cli = Cli::parse_from(["smugglex", "http://example.com", "--json"]);
+    assert!(cli.json, "--json should set the shorthand flag");
+    assert!(
+        matches!(cli.effective_format(), OutputFormat::Json),
+        "effective format should be json when --json is set"
+    );
+}
+
+#[test]
+fn test_json_shorthand_takes_precedence_over_plain_format() {
+    let cli = Cli::parse_from([
+        "smugglex",
+        "http://example.com",
+        "--format",
+        "plain",
+        "--json",
+    ]);
+    assert!(
+        matches!(cli.format, OutputFormat::Plain),
+        "the explicit format flag should still parse as plain"
+    );
+    assert!(
+        matches!(cli.effective_format(), OutputFormat::Json),
+        "--json should take precedence in effective_format"
+    );
+}
+
 // Test exit-first option
 #[test]
 fn test_exit_first_short_flag() {
