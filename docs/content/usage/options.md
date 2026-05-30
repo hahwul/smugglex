@@ -18,6 +18,8 @@ description = "All CLI options for smugglex"
 | `-t, --timeout` | 10 | Socket timeout in seconds |
 | `-H, --header` | | Custom header (repeatable) |
 | `--vhost` | | Virtual host for Host header |
+| `--raw-request` | | Read a raw HTTP request from a file and use it as the request template |
+| `--raw-request-proto` | https | Scheme for `--raw-request` when the request line is origin-form (`http` or `https`) |
 | `--cookies` | | Fetch and include cookies |
 | `-d, --delay` | 0 | Delay between requests in milliseconds |
 | `-j, --concurrency` | 1 | Number of URLs to scan concurrently |
@@ -66,6 +68,16 @@ smugglex --fingerprint --fuzz https://target.com
 
 # Custom headers and timeout
 smugglex -H "Authorization: Bearer token" -t 15 https://target.com
+
+# Replay a captured request (e.g. exported from Burp Suite) as the template.
+# Method, request-target, Host and headers (cookies, auth, ...) are reused;
+# the target is taken from the Host header. The body is replaced by the
+# generated smuggling payloads, and Content-Length / Transfer-Encoding are
+# managed by smugglex.
+smugglex --raw-request request.txt
+
+# Same, but the captured request targets a plain-HTTP service
+smugglex --raw-request request.txt --raw-request-proto http
 
 # Route through a proxy (e.g., Burp Suite)
 smugglex -x http://127.0.0.1:8080 https://target.com
