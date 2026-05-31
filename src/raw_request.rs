@@ -54,6 +54,18 @@ impl RawRequest {
     }
 }
 
+/// Merge captured headers with user-supplied `-H` headers.
+///
+/// Captured headers come first (preserving the template order), then the user's
+/// `-H` headers are appended so an explicit `-H` is *additive* and never silently
+/// dropped. Overlapping names are intentionally kept as duplicates rather than
+/// de-duplicated: smuggling tests sometimes rely on header repetition, and we
+/// want to exercise the origin server's own first/last precedence.
+pub fn merge_headers(mut captured: Vec<String>, user: &[String]) -> Vec<String> {
+    captured.extend(user.iter().cloned());
+    captured
+}
+
 /// Parse the textual contents of a raw HTTP request file.
 ///
 /// Accepts both `\r\n` and bare `\n` line endings. The request body (anything
@@ -381,6 +393,41 @@ mod tests {
         let raw = "GET / HTTP/1.1\r\nAccept: */*\r\n\r\n";
         let err = parse_raw_request(raw).unwrap_err();
         assert!(matches!(err, SmugglexError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn merge_headers_appends_user_after_captured() {
+        let captured = vec!["Cookie: a=1".to_string(), "Accept: */*".to_string()];
+        let user = vec!["X-Collab: marker".to_string()];
+        assert_eq!(
+            merge_headers(captured, &user),
+            vec![
+                "Cookie: a=1".to_string(),
+                "Accept: */*".to_string(),
+                "X-Collab: marker".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_headers_no_user_headers_is_identity() {
+        let captured = vec!["Cookie: a=1".to_string()];
+        assert_eq!(merge_headers(captured.clone(), &[]), captured);
+    }
+
+    #[test]
+    fn merge_headers_keeps_overlapping_names_as_duplicates() {
+        // An explicit -H that overlaps a captured header must NOT replace it;
+        // both are emitted so header-repetition tests still work.
+        let captured = vec!["User-Agent: captured".to_string()];
+        let user = vec!["User-Agent: override".to_string()];
+        assert_eq!(
+            merge_headers(captured, &user),
+            vec![
+                "User-Agent: captured".to_string(),
+                "User-Agent: override".to_string(),
+            ]
+        );
     }
 
     #[test]

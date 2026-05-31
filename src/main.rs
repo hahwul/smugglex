@@ -23,7 +23,7 @@ use smugglex::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
     get_te_cl_payloads, get_te_te_payloads,
 };
-use smugglex::raw_request::parse_raw_request;
+use smugglex::raw_request::{merge_headers, parse_raw_request};
 use smugglex::scanner::{CheckParams, run_checks_for_type};
 use smugglex::utils::{LogLevel, fetch_cookies, is_machine, log, set_machine};
 
@@ -277,9 +277,8 @@ fn apply_raw_request(cli: &mut Cli) -> Result<String> {
     cli.method = raw.method;
     // Merge headers additively: captured headers first, then any user-supplied -H,
     // so an explicit -H (e.g. a collaborator marker) is never silently dropped.
-    let mut headers = raw.headers;
-    headers.extend(std::mem::take(&mut cli.headers));
-    cli.headers = headers;
+    let user_headers = std::mem::take(&mut cli.headers);
+    cli.headers = merge_headers(raw.headers, &user_headers);
     // Apply the request-target verbatim downstream (no URL normalization).
     cli.raw_target = Some(raw.target);
     // Preserve the exact Host header (including any :port) unless --vhost was set explicitly.
