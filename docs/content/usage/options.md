@@ -71,12 +71,11 @@ smugglex -H "Authorization: Bearer token" -t 15 https://target.com
 
 # Replay a captured request (e.g. exported from Burp Suite) as the template.
 # Method, request-target, Host and headers (cookies, auth, ...) are reused;
-# the target is taken from the Host header. For origin-form captures
-# (POST /path ...) the request-target is sent verbatim — dot-segments, matrix
-# params and '#' are preserved, not normalized — so path-based payloads survive.
-# (Absolute-form lines, GET http://..., still have their target normalized.)
-# The body is replaced by the generated smuggling payloads, and
-# Content-Length / Transfer-Encoding are managed by smugglex.
+# the target is taken from the Host header. The request-target is sent verbatim
+# — dot-segments, matrix params and '#' are preserved, not normalized — for both
+# origin-form (POST /path ...) and absolute-form (GET http://...) request lines,
+# so path-based payloads survive. The body is replaced by the generated smuggling
+# payloads, and Content-Length / Transfer-Encoding are managed by smugglex.
 smugglex --raw-request request.txt
 
 # Same, but the captured request targets a plain-HTTP service
