@@ -375,9 +375,22 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     let use_tls = url.scheme() == "https";
     let host_header = cli.vhost.as_deref().unwrap_or(host);
 
+    // What we report to the user/agent (logs, JSON `target`, output filenames).
+    // For a --raw-request capture, `target_url` is only the root-path connect URL,
+    // so reports would otherwise hide the actual endpoint; rebuild it from the
+    // literal request-target by concatenation (no URL re-parse, so the exact bytes
+    // survive). Normal URLs report `target_url` unchanged.
+    let display_target_owned;
+    let display_target: &str = if cli.raw_target.is_some() {
+        display_target_owned = format!("{}://{}:{}{}", url.scheme(), host, port, path);
+        &display_target_owned
+    } else {
+        target_url
+    };
+
     // Human logs only in plain mode
     if !is_machine() {
-        log(LogLevel::Info, &format!("start scan to {}", target_url));
+        log(LogLevel::Info, &format!("start scan to {}", display_target));
     }
 
     let cookies = if cli.use_cookies {
@@ -556,7 +569,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         log_scan_results(
             &results,
             &cli.effective_format(),
-            target_url,
+            display_target,
             &cli.method,
             &fingerprint_info,
         );
@@ -576,7 +589,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                 use_tls,
                 timeout: cli.timeout,
                 verbose: cli.verbose,
-                target_url,
+                target_url: display_target,
                 ports_str: &cli.exploit_ports,
                 wordlist_path: cli.exploit_wordlist.as_deref(),
                 delay: cli.delay,
@@ -603,7 +616,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         && let Some(ref output_file) = cli.output
         && let Err(e) = save_results_to_file(
             output_file,
-            target_url,
+            display_target,
             &cli.method,
             results.clone(),
             &fingerprint_info,
@@ -625,7 +638,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
 
     // Build the structured result for the outcome (always produced, used for JSON batch or exit code)
     let scan_results = ScanResults {
-        target: target_url.to_string(),
+        target: display_target.to_string(),
         method: cli.method.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         fingerprint: fingerprint_info,
@@ -634,7 +647,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     };
 
     ScanOutcome::Success {
-        target: target_url.to_string(),
+        target: display_target.to_string(),
         scan_results,
         found_vulnerability,
     }
