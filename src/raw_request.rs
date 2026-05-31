@@ -177,11 +177,23 @@ fn parse_absolute_form(
         .to_string();
     let port = url.port();
 
-    let mut target = url.path().to_string();
-    if let Some(query) = url.query() {
-        target.push('?');
-        target.push_str(query);
-    }
+    // Preserve the literal request-target (path + query + any fragment) verbatim
+    // rather than reading `url.path()`/`url.query()`, which normalize dot-segments
+    // (`/a/../b` → `/b`) and drop everything after `#`. Slice the original string
+    // from where the authority ends — the first `/`, `?` or `#` after the
+    // `scheme://` prefix — none of which can appear unescaped in the authority.
+    // `url.scheme()` is lowercased but the same length as the captured scheme, so
+    // the byte offset is correct even for `HTTP://`.
+    let after_scheme = &target_raw[url.scheme().len() + 3..];
+    let target = match after_scheme.find(['/', '?', '#']) {
+        // A real path: take it (and everything after) as-is.
+        Some(i) if after_scheme.as_bytes()[i] == b'/' => after_scheme[i..].to_string(),
+        // Query/fragment but no path (`http://host?q`): synthesize a root path so
+        // the request-target stays valid origin-form (`/?q`).
+        Some(i) => format!("/{}", &after_scheme[i..]),
+        // Authority only (`http://host`): default to root.
+        None => "/".to_string(),
+    };
 
     // Prefer an explicit Host header; otherwise reconstruct it from the URL.
     let host_header = host_header.unwrap_or_else(|| match port {
@@ -340,6 +352,57 @@ mod tests {
         assert_eq!(parsed.scheme, Some("https".to_string()));
         assert_eq!(parsed.target, "/v1/users?id=7");
         assert_eq!(parsed.host_header, "api.example.com:8443");
+    }
+
+    #[test]
+    fn absolute_form_preserves_dot_segments_and_fragment() {
+        // url.path()/url.query() would collapse `/../` and drop `#frag`; the literal
+        // slice must keep the request-target byte-for-byte.
+        let raw = "GET https://h.test/a/../b?x=1#frag HTTP/1.1\r\nAccept: */*\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        assert_eq!(parsed.host, "h.test");
+        assert_eq!(parsed.target, "/a/../b?x=1#frag");
+    }
+
+    #[test]
+    fn absolute_form_preserves_encoded_and_matrix_params() {
+        let raw = "GET http://h/api/..%2fadmin/x;y=1/../z?q=a%20b HTTP/1.1\r\nAccept: */*\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        assert_eq!(parsed.target, "/api/..%2fadmin/x;y=1/../z?q=a%20b");
+    }
+
+    #[test]
+    fn absolute_form_ipv6_preserves_dot_segments() {
+        let raw = "GET http://[::1]:8080/a/../b HTTP/1.1\r\nAccept: */*\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        assert_eq!(parsed.host, "[::1]");
+        assert_eq!(parsed.port, Some(8080));
+        assert_eq!(parsed.target, "/a/../b");
+    }
+
+    #[test]
+    fn absolute_form_query_only_synthesizes_root_path() {
+        let raw = "GET http://h?q=1 HTTP/1.1\r\nAccept: */*\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        assert_eq!(parsed.host, "h");
+        assert_eq!(parsed.target, "/?q=1");
+    }
+
+    #[test]
+    fn absolute_form_authority_only_defaults_to_root() {
+        let raw = "GET https://h HTTP/1.1\r\nAccept: */*\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        assert_eq!(parsed.target, "/");
+    }
+
+    #[test]
+    fn absolute_form_with_userinfo_keeps_path_and_host() {
+        // Userinfo precedes the host but can't contain '/', so the first '/' still
+        // marks the request-target. The host (not the userinfo) is used downstream.
+        let raw = "GET http://user:pw@h.test/a/../b HTTP/1.1\r\nAccept: */*\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        assert_eq!(parsed.host, "h.test");
+        assert_eq!(parsed.target, "/a/../b");
     }
 
     #[test]

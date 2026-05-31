@@ -64,11 +64,10 @@ smugglex --raw-request request.txt --raw-request-proto http
 smugglex --raw-request request.txt -H "X-Collab: abcd.oastify.com"  # -H is additive
 ```
 
-For origin-form captures (`POST /path ...`, the usual Burp "copy to file" output)
-the request-target is sent verbatim — dot-segments, matrix params and `#` are
-preserved, not normalized — so path-based payloads survive. Any `-H` headers are
-merged on top of the captured ones. (Absolute-form request lines, `GET http://...`,
-still have their target normalized when parsed.)
+The captured request-target is sent verbatim — dot-segments, matrix params and `#`
+are preserved, not normalized — for both origin-form (`POST /path ...`) and
+absolute-form (`GET http://...`) request lines, so path-based payloads survive.
+Any `-H` headers are merged on top of the captured ones.
 
 For detailed usage and options, see [Usage Guide](https://smugglex.hahwul.com/usage/).
 
