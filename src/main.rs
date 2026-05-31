@@ -23,7 +23,7 @@ use smugglex::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
     get_te_cl_payloads, get_te_te_payloads,
 };
-use smugglex::raw_request::parse_raw_request;
+use smugglex::raw_request::{merge_headers, parse_raw_request};
 use smugglex::scanner::{CheckParams, run_checks_for_type};
 use smugglex::utils::{LogLevel, fetch_cookies, is_machine, log, set_machine};
 
@@ -256,21 +256,37 @@ fn apply_raw_request(cli: &mut Cli) -> Result<String> {
     })?;
     let raw = parse_raw_request(&content)?;
 
-    // Absolute-form request lines carry their own scheme; otherwise honor
-    // --raw-request-proto (already validated to http/https at the clap layer).
-    let scheme = raw.scheme.unwrap_or_else(|| cli.raw_request_proto.clone());
-    let use_tls = scheme == "https";
-    let port = raw.port.unwrap_or(if use_tls { 443 } else { 80 });
+    // Connection target only (scheme/host/port). The request-target is applied
+    // separately and verbatim via cli.raw_target so its exact bytes survive.
+    let connect_url = raw.connect_url(&cli.raw_request_proto);
+
+    // The captured request's method wins, so warn if the user also passed an
+    // explicit --method (anything other than the default) that we're discarding.
+    let user_set_method = cli.method != smugglex::cli::DEFAULT_METHOD;
+    if user_set_method && cli.method != raw.method && !is_machine() {
+        log(
+            LogLevel::Warning,
+            &format!(
+                "--method {} is ignored; the captured request method {} (from --raw-request) is used instead",
+                cli.method, raw.method
+            ),
+        );
+    }
 
     // Feed the captured request into the same fields the payload builders read.
     cli.method = raw.method;
-    cli.headers = raw.headers;
+    // Merge headers additively: captured headers first, then any user-supplied -H,
+    // so an explicit -H (e.g. a collaborator marker) is never silently dropped.
+    let user_headers = std::mem::take(&mut cli.headers);
+    cli.headers = merge_headers(raw.headers, &user_headers);
+    // Apply the request-target verbatim downstream (no URL normalization).
+    cli.raw_target = Some(raw.target);
     // Preserve the exact Host header (including any :port) unless --vhost was set explicitly.
     if cli.vhost.is_none() {
         cli.vhost = Some(raw.host_header);
     }
 
-    Ok(format!("{}://{}:{}{}", scheme, raw.host, port, raw.target))
+    Ok(connect_url)
 }
 
 fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
@@ -343,9 +359,14 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         None => return scan_failure("Invalid port in URL".to_string()),
     };
     // Preserve any query string so raw-request templates (and normal URLs) keep
-    // their full request-target, not just the path.
+    // their full request-target, not just the path. A --raw-request capture carries
+    // its literal request-target in cli.raw_target so the exact bytes (dot-segments,
+    // `#`, matrix params) bypass the URL normalization the synthetic connect URL went
+    // through.
     let path_with_query;
-    let path = if let Some(query) = url.query() {
+    let path = if let Some(ref raw_target) = cli.raw_target {
+        raw_target.as_str()
+    } else if let Some(query) = url.query() {
         path_with_query = format!("{}?{}", url.path(), query);
         path_with_query.as_str()
     } else {
