@@ -171,8 +171,12 @@ fn parse_absolute_form(
 
 /// Whether a request-target is absolute-form (carries its own scheme).
 fn is_absolute_form(target: &str) -> bool {
-    let lower = target.to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
+    let starts_with_ci = |prefix: &str| {
+        target
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    };
+    starts_with_ci("http://") || starts_with_ci("https://")
 }
 
 /// Whether a header is one smugglex sets/controls itself for smuggling payloads.
@@ -251,6 +255,17 @@ mod tests {
         assert_eq!(parsed.port, Some(8443));
         // The emitted Host header keeps the port intact.
         assert_eq!(parsed.host_header, "example.com:8443");
+    }
+
+    #[test]
+    fn extracts_bracketed_ipv6_host_from_origin_form() {
+        let raw = "GET /status HTTP/1.1\r\nHost: [::1]:8080\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        // Brackets are preserved so the synthetic URL `https://[::1]:8080/...`
+        // and the emitted Host header stay valid.
+        assert_eq!(parsed.host, "[::1]");
+        assert_eq!(parsed.port, Some(8080));
+        assert_eq!(parsed.host_header, "[::1]:8080");
     }
 
     #[test]

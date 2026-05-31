@@ -256,20 +256,9 @@ fn apply_raw_request(cli: &mut Cli) -> Result<String> {
     })?;
     let raw = parse_raw_request(&content)?;
 
-    // Absolute-form request lines carry their own scheme; otherwise honor --raw-request-proto.
-    let scheme = match raw.scheme {
-        Some(scheme) => scheme,
-        None => {
-            let proto = cli.raw_request_proto.to_ascii_lowercase();
-            if proto != "http" && proto != "https" {
-                return Err(SmugglexError::InvalidInput(format!(
-                    "invalid --raw-request-proto '{}' (expected 'http' or 'https')",
-                    cli.raw_request_proto
-                )));
-            }
-            proto
-        }
-    };
+    // Absolute-form request lines carry their own scheme; otherwise honor
+    // --raw-request-proto (already validated to http/https at the clap layer).
+    let scheme = raw.scheme.unwrap_or_else(|| cli.raw_request_proto.clone());
     let use_tls = scheme == "https";
     let port = raw.port.unwrap_or(if use_tls { 443 } else { 80 });
 

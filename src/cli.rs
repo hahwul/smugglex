@@ -71,7 +71,8 @@ pub struct Cli {
         long = "raw-request-proto",
         value_name = "SCHEME",
         default_value = "https",
-        requires = "raw_request"
+        requires = "raw_request",
+        value_parser = ["http", "https"]
     )]
     pub raw_request_proto: String,
 
