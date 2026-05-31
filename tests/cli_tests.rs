@@ -542,3 +542,35 @@ fn test_exploit_path_fuzz_with_wordlist() {
         Some("/custom/wordlist.txt".to_string())
     );
 }
+
+#[test]
+fn test_raw_request_default_none() {
+    let cli = Cli::parse_from(["smugglex", "http://example.com"]);
+    assert_eq!(cli.raw_request, None);
+}
+
+#[test]
+fn test_raw_request_option() {
+    let cli = Cli::parse_from(["smugglex", "--raw-request", "request.txt"]);
+    assert_eq!(cli.raw_request, Some("request.txt".to_string()));
+    // The target comes from the request file, so no positional URL is required.
+    assert!(cli.urls.is_empty());
+}
+
+#[test]
+fn test_raw_request_proto_default_https() {
+    let cli = Cli::parse_from(["smugglex", "--raw-request", "request.txt"]);
+    assert_eq!(cli.raw_request_proto, "https");
+}
+
+#[test]
+fn test_raw_request_proto_override() {
+    let cli = Cli::parse_from([
+        "smugglex",
+        "--raw-request",
+        "request.txt",
+        "--raw-request-proto",
+        "http",
+    ]);
+    assert_eq!(cli.raw_request_proto, "http");
+}

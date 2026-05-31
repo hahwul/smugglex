@@ -61,6 +61,21 @@ pub struct Cli {
     #[arg(help_heading = "REQUEST", long = "vhost")]
     pub vhost: Option<String>,
 
+    /// Read a raw HTTP request from a file and use it as the request template
+    #[arg(help_heading = "REQUEST", long = "raw-request", value_name = "FILE")]
+    pub raw_request: Option<String>,
+
+    /// Scheme for --raw-request when the request line is origin-form (http or https)
+    #[arg(
+        help_heading = "REQUEST",
+        long = "raw-request-proto",
+        value_name = "SCHEME",
+        default_value = "https",
+        requires = "raw_request",
+        value_parser = ["http", "https"]
+    )]
+    pub raw_request_proto: String,
+
     /// Fetch and append cookies from initial request
     #[arg(help_heading = "REQUEST", long = "cookies", action = clap::ArgAction::SetTrue)]
     pub use_cookies: bool,

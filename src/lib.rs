@@ -7,5 +7,6 @@ pub mod model;
 pub mod mutator;
 pub mod output;
 pub mod payloads;
+pub mod raw_request;
 pub mod scanner;
 pub mod utils;

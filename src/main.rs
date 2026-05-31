@@ -6,7 +6,7 @@ use std::time::Duration;
 use url::Url;
 
 use smugglex::cli::Cli;
-use smugglex::error::Result;
+use smugglex::error::{Result, SmugglexError};
 use smugglex::exploit::{
     LocalhostAccessParams, PathFuzzParams, VulnerabilityContext, extract_vulnerability_context,
     get_fuzz_paths, print_localhost_results, print_path_fuzz_results, test_localhost_access,
@@ -23,6 +23,7 @@ use smugglex::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
     get_te_cl_payloads, get_te_te_payloads,
 };
+use smugglex::raw_request::parse_raw_request;
 use smugglex::scanner::{CheckParams, run_checks_for_type};
 use smugglex::utils::{LogLevel, fetch_cookies, is_machine, log, set_machine};
 
@@ -80,7 +81,7 @@ impl ScanOutcome {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     cli.apply_global_settings();
 
     // Activate machine mode for clean structured output (used by AI agents, scripts, CI).
@@ -96,35 +97,16 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let urls = resolve_urls(&cli)?;
-    if urls.is_empty() {
-        if cli.effective_format().is_json() {
-            // Produce a valid (empty) JSON envelope even on input error so AI agents can parse uniformly.
-            let empty_batch = build_batch_results(Vec::new(), Some(env!("CARGO_PKG_VERSION")));
-            match serde_json::to_string_pretty(&empty_batch) {
-                Ok(json) => println!("{}", json),
-                Err(e) => {
-                    log(
-                        LogLevel::Error,
-                        &format!("failed to serialize empty batch results: {}", e),
-                    );
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "results": [],
-                            "summary": {
-                                "total_targets": 0,
-                                "vulnerable_targets": 0,
-                                "total_checks": 0,
-                                "vulnerable_checks": 0
-                            }
-                        })
-                    );
-                }
-            }
-        } else {
-            eprintln!("{} No valid URLs provided", "[!]".yellow().bold());
+    let urls = match resolve_urls(&mut cli) {
+        Ok(urls) => urls,
+        Err(e) => {
+            emit_input_error(&cli, &e.to_string());
+            // Usage/input error → exit 2 (common convention for CLI tools)
+            std::process::exit(2);
         }
+    };
+    if urls.is_empty() {
+        emit_input_error(&cli, "No valid URLs provided");
         // Usage/input error → exit 2 (common convention for CLI tools)
         std::process::exit(2);
     }
@@ -229,7 +211,79 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn resolve_urls(cli: &Cli) -> Result<Vec<String>> {
+/// Emit an input/usage error consistently with the selected output format:
+/// a pure (empty) JSON envelope in machine mode so AI agents can parse uniformly,
+/// or a human-readable message otherwise. Callers exit with code 2 afterward.
+fn emit_input_error(cli: &Cli, message: &str) {
+    if cli.effective_format().is_json() {
+        let empty_batch = build_batch_results(Vec::new(), Some(env!("CARGO_PKG_VERSION")));
+        match serde_json::to_string_pretty(&empty_batch) {
+            Ok(json) => println!("{}", json),
+            Err(e) => {
+                log(
+                    LogLevel::Error,
+                    &format!("failed to serialize empty batch results: {}", e),
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "results": [],
+                        "summary": {
+                            "total_targets": 0,
+                            "vulnerable_targets": 0,
+                            "total_checks": 0,
+                            "vulnerable_checks": 0
+                        }
+                    })
+                );
+            }
+        }
+    } else {
+        eprintln!("{} {}", "[!]".yellow().bold(), message);
+    }
+}
+
+/// Load a `--raw-request` file and apply it as the request template: parse it,
+/// override the request fields the payload generators read (method, headers,
+/// Host), and return the synthetic target URL the scan pipeline consumes.
+fn apply_raw_request(cli: &mut Cli) -> Result<String> {
+    let path = cli
+        .raw_request
+        .clone()
+        .expect("apply_raw_request called without --raw-request");
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        SmugglexError::Io(format!("failed to read raw request file '{}': {}", path, e))
+    })?;
+    let raw = parse_raw_request(&content)?;
+
+    // Absolute-form request lines carry their own scheme; otherwise honor
+    // --raw-request-proto (already validated to http/https at the clap layer).
+    let scheme = raw.scheme.unwrap_or_else(|| cli.raw_request_proto.clone());
+    let use_tls = scheme == "https";
+    let port = raw.port.unwrap_or(if use_tls { 443 } else { 80 });
+
+    // Feed the captured request into the same fields the payload builders read.
+    cli.method = raw.method;
+    cli.headers = raw.headers;
+    // Preserve the exact Host header (including any :port) unless --vhost was set explicitly.
+    if cli.vhost.is_none() {
+        cli.vhost = Some(raw.host_header);
+    }
+
+    Ok(format!("{}://{}:{}{}", scheme, raw.host, port, raw.target))
+}
+
+fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
+    if cli.raw_request.is_some() {
+        if !cli.urls.is_empty() {
+            return Err(SmugglexError::InvalidInput(
+                "--raw-request cannot be combined with target URLs; the target is taken from the request file".to_string(),
+            ));
+        }
+        let target = apply_raw_request(cli)?;
+        return Ok(vec![target]);
+    }
+
     if !cli.urls.is_empty() {
         Ok(cli.urls.clone())
     } else if !io::stdin().is_terminal() {
@@ -288,7 +342,15 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         Some(p) => p,
         None => return scan_failure("Invalid port in URL".to_string()),
     };
-    let path = url.path();
+    // Preserve any query string so raw-request templates (and normal URLs) keep
+    // their full request-target, not just the path.
+    let path_with_query;
+    let path = if let Some(query) = url.query() {
+        path_with_query = format!("{}?{}", url.path(), query);
+        path_with_query.as_str()
+    } else {
+        url.path()
+    };
     let use_tls = url.scheme() == "https";
     let host_header = cli.vhost.as_deref().unwrap_or(host);
 

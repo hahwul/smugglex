@@ -56,6 +56,13 @@ Read URLs from stdin:
 cat urls.txt | smugglex
 ```
 
+Replay a captured request (e.g. exported from Burp Suite) as the request template:
+
+```bash
+smugglex --raw-request request.txt              # target taken from the Host header
+smugglex --raw-request request.txt --raw-request-proto http
+```
+
 For detailed usage and options, see [Usage Guide](https://smugglex.hahwul.com/usage/).
 
 ## Examples
