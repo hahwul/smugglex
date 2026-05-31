@@ -2,6 +2,11 @@ use clap::{Parser, ValueEnum};
 use colored::control;
 use std::fmt;
 
+/// Default method for the attack request. Kept as a named constant so the
+/// `--raw-request` override can tell whether the user explicitly set `--method`
+/// (anything other than this default) before warning about a conflict.
+pub const DEFAULT_METHOD: &str = "POST";
+
 /// Output format type
 #[derive(Debug, Clone, ValueEnum)]
 pub enum OutputFormat {
@@ -46,7 +51,7 @@ pub struct Cli {
     pub urls: Vec<String>,
 
     /// Custom method for the attack request
-    #[arg(help_heading = "REQUEST", short, long, default_value = "POST")]
+    #[arg(help_heading = "REQUEST", short, long, default_value = DEFAULT_METHOD)]
     pub method: String,
 
     /// Socket timeout in seconds
@@ -75,6 +80,13 @@ pub struct Cli {
         value_parser = ["http", "https"]
     )]
     pub raw_request_proto: String,
+
+    /// Literal request-target captured from `--raw-request`, applied verbatim so the
+    /// exact bytes (dot-segments, `#`, params) survive instead of being normalized by
+    /// re-parsing a synthetic URL. Not a user-facing flag; populated by the raw-request
+    /// pipeline.
+    #[arg(skip)]
+    pub raw_target: Option<String>,
 
     /// Fetch and append cookies from initial request
     #[arg(help_heading = "REQUEST", long = "cookies", action = clap::ArgAction::SetTrue)]

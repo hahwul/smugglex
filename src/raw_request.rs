@@ -35,6 +35,25 @@ pub struct RawRequest {
     pub headers: Vec<String>,
 }
 
+impl RawRequest {
+    /// Build the synthetic URL used purely to derive the *connection* target
+    /// (scheme, host, port) — its path is always `/`.
+    ///
+    /// The real request-target ([`RawRequest::target`]) is applied separately and
+    /// verbatim downstream, so embedding it here is intentionally avoided: routing
+    /// it through `Url::parse` would normalize dot-segments (`/a/../b` → `/b`) and
+    /// drop anything after a `#`, mangling path-based smuggling payloads.
+    ///
+    /// `proto_default` (from `--raw-request-proto`) supplies the scheme for
+    /// origin-form requests, which carry none of their own.
+    pub fn connect_url(&self, proto_default: &str) -> String {
+        let scheme = self.scheme.as_deref().unwrap_or(proto_default);
+        let use_tls = scheme == "https";
+        let port = self.port.unwrap_or(if use_tls { 443 } else { 80 });
+        format!("{}://{}:{}/", scheme, self.host, port)
+    }
+}
+
 /// Parse the textual contents of a raw HTTP request file.
 ///
 /// Accepts both `\r\n` and bare `\n` line endings. The request body (anything
@@ -362,6 +381,44 @@ mod tests {
         let raw = "GET / HTTP/1.1\r\nAccept: */*\r\n\r\n";
         let err = parse_raw_request(raw).unwrap_err();
         assert!(matches!(err, SmugglexError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn connect_url_origin_form_uses_default_proto_and_port() {
+        let raw = parse_raw_request("GET /a HTTP/1.1\r\nHost: example.com\r\n\r\n").unwrap();
+        // Origin-form carries no scheme: --raw-request-proto decides it (and the port).
+        assert_eq!(raw.connect_url("https"), "https://example.com:443/");
+        assert_eq!(raw.connect_url("http"), "http://example.com:80/");
+    }
+
+    #[test]
+    fn connect_url_keeps_explicit_port() {
+        let raw = parse_raw_request("GET /a HTTP/1.1\r\nHost: example.com:8443\r\n\r\n").unwrap();
+        assert_eq!(raw.connect_url("https"), "https://example.com:8443/");
+    }
+
+    #[test]
+    fn connect_url_absolute_form_scheme_wins_over_default() {
+        let raw = parse_raw_request("GET http://api.example.com/x HTTP/1.1\r\nAccept: */*\r\n\r\n")
+            .unwrap();
+        // Absolute-form carries its own scheme; the proto default is ignored.
+        assert_eq!(raw.connect_url("https"), "http://api.example.com:80/");
+    }
+
+    #[test]
+    fn connect_url_path_is_always_root() {
+        // The real request-target lives in `target`; connect_url must never embed it,
+        // so dot-segments and fragments can't be normalized away by URL re-parsing.
+        let raw =
+            parse_raw_request("GET /a/../b#frag?x=1 HTTP/1.1\r\nHost: h.test\r\n\r\n").unwrap();
+        assert_eq!(raw.connect_url("https"), "https://h.test:443/");
+        assert_eq!(raw.target, "/a/../b#frag?x=1");
+    }
+
+    #[test]
+    fn connect_url_bracketed_ipv6() {
+        let raw = parse_raw_request("GET /a HTTP/1.1\r\nHost: [::1]:8080\r\n\r\n").unwrap();
+        assert_eq!(raw.connect_url("http"), "http://[::1]:8080/");
     }
 
     #[test]

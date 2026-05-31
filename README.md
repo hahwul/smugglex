@@ -61,7 +61,12 @@ Replay a captured request (e.g. exported from Burp Suite) as the request templat
 ```bash
 smugglex --raw-request request.txt              # target taken from the Host header
 smugglex --raw-request request.txt --raw-request-proto http
+smugglex --raw-request request.txt -H "X-Collab: abcd.oastify.com"  # -H is additive
 ```
+
+The captured request-target is sent verbatim (dot-segments, matrix params and `#`
+are preserved, not normalized), and any `-H` headers are merged on top of the
+captured ones.
 
 For detailed usage and options, see [Usage Guide](https://smugglex.hahwul.com/usage/).
 

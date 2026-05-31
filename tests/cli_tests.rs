@@ -558,6 +558,14 @@ fn test_raw_request_option() {
 }
 
 #[test]
+fn test_raw_target_not_a_user_flag_and_defaults_none() {
+    // raw_target is an internal (#[arg(skip)]) field, not a CLI flag.
+    let cli = Cli::parse_from(["smugglex", "http://example.com"]);
+    assert_eq!(cli.raw_target, None);
+    assert!(Cli::try_parse_from(["smugglex", "http://example.com", "--raw-target", "/x"]).is_err());
+}
+
+#[test]
 fn test_raw_request_proto_default_https() {
     let cli = Cli::parse_from(["smugglex", "--raw-request", "request.txt"]);
     assert_eq!(cli.raw_request_proto, "https");
