@@ -101,6 +101,16 @@ fn parse_origin_form(
     host_header: Option<String>,
     headers: Vec<String>,
 ) -> Result<RawRequest> {
+    // Only origin-form targets (`/path?query`) are usable as a smuggling
+    // template. Reject authority-form (`CONNECT host:port`) and asterisk-form
+    // (`OPTIONS *`) request lines, which would otherwise be concatenated into an
+    // invalid synthetic URL downstream.
+    if !target.starts_with('/') {
+        return Err(SmugglexError::InvalidInput(format!(
+            "unsupported request target '{}' (expected an absolute path like '/path' or an absolute URL)",
+            target
+        )));
+    }
     let host_header = host_header.ok_or_else(|| {
         SmugglexError::InvalidInput(
             "raw request is missing a Host header (required to determine the target)".to_string(),
@@ -128,8 +138,10 @@ fn parse_absolute_form(
 ) -> Result<RawRequest> {
     let url = url::Url::parse(target_raw)
         .map_err(|e| SmugglexError::InvalidInput(format!("invalid request target: {}", e)))?;
+    // Use `host()` (not `host_str()`) so IPv6 literals keep their brackets
+    // (`[::1]`); the unbracketed form would build invalid URLs and Host headers.
     let host = url
-        .host_str()
+        .host()
         .ok_or_else(|| SmugglexError::InvalidInput("request target has no host".to_string()))?
         .to_string();
     let port = url.port();
@@ -282,6 +294,35 @@ mod tests {
         assert_eq!(parsed.scheme, Some("https".to_string()));
         assert_eq!(parsed.target, "/v1/users?id=7");
         assert_eq!(parsed.host_header, "api.example.com:8443");
+    }
+
+    #[test]
+    fn parses_absolute_form_ipv6_request_line() {
+        let raw = "GET http://[::1]:8080/health?ok=1 HTTP/1.1\r\n\
+                   Accept: */*\r\n\
+                   \r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        // IPv6 literals keep their brackets so the synthetic URL and emitted
+        // Host header are valid.
+        assert_eq!(parsed.host, "[::1]");
+        assert_eq!(parsed.port, Some(8080));
+        assert_eq!(parsed.scheme, Some("http".to_string()));
+        assert_eq!(parsed.target, "/health?ok=1");
+        assert_eq!(parsed.host_header, "[::1]:8080");
+    }
+
+    #[test]
+    fn errors_on_authority_form_target() {
+        let raw = "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        let err = parse_raw_request(raw).unwrap_err();
+        assert!(matches!(err, SmugglexError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn errors_on_asterisk_form_target() {
+        let raw = "OPTIONS * HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        let err = parse_raw_request(raw).unwrap_err();
+        assert!(matches!(err, SmugglexError::InvalidInput(_)));
     }
 
     #[test]
