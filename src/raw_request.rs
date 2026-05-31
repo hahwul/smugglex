@@ -33,6 +33,10 @@ pub struct RawRequest {
     pub host_header: String,
     /// Remaining headers as `Name: Value`, with [`MANAGED_HEADERS`] stripped out.
     pub headers: Vec<String>,
+    /// Whether the file carried a (non-empty) message body after the header block.
+    /// The body itself is discarded — the smuggling payloads generate their own —
+    /// but the flag lets the CLI note the discard in verbose mode.
+    pub had_body: bool,
 }
 
 impl RawRequest {
@@ -86,6 +90,15 @@ pub fn parse_raw_request(content: &str) -> Result<RawRequest> {
         .next()
         .ok_or_else(|| SmugglexError::InvalidInput("raw request missing method".to_string()))?
         .to_string();
+    // Guard against pointing `--raw-request` at a non-HTTP file (e.g. an accidental
+    // JSON or HTML document): a valid method is an RFC 7230 token, so anything with
+    // quotes/braces/colons gives a clear error instead of a baffling downstream one.
+    if method.is_empty() || !method.bytes().all(is_tchar) {
+        return Err(SmugglexError::InvalidInput(format!(
+            "'{}' is not a valid HTTP method; the first line does not look like an HTTP request line (expected e.g. 'GET /path HTTP/1.1')",
+            method
+        )));
+    }
     let target_raw = parts
         .next()
         .ok_or_else(|| {
@@ -96,8 +109,12 @@ pub fn parse_raw_request(content: &str) -> Result<RawRequest> {
     // Headers run until the first blank line; everything after is the body.
     let mut headers: Vec<String> = Vec::new();
     let mut host_header: Option<String> = None;
-    for line in lines {
+    let mut had_body = false;
+    while let Some(line) = lines.next() {
         if line.trim().is_empty() {
+            // Header section ends at the blank line; any non-empty line after it is
+            // the message body (discarded, but recorded so the CLI can note it).
+            had_body = lines.any(|l| !l.trim().is_empty());
             break;
         }
         let Some((name, value)) = line.split_once(':') else {
@@ -117,11 +134,13 @@ pub fn parse_raw_request(content: &str) -> Result<RawRequest> {
         headers.push(format!("{}: {}", name, value));
     }
 
-    if is_absolute_form(&target_raw) {
-        parse_absolute_form(method, &target_raw, host_header, headers)
+    let mut request = if is_absolute_form(&target_raw) {
+        parse_absolute_form(method, &target_raw, host_header, headers)?
     } else {
-        parse_origin_form(method, target_raw, host_header, headers)
-    }
+        parse_origin_form(method, target_raw, host_header, headers)?
+    };
+    request.had_body = had_body;
+    Ok(request)
 }
 
 /// Build a [`RawRequest`] from an origin-form request line (`/path?query`),
@@ -147,7 +166,7 @@ fn parse_origin_form(
             "raw request is missing a Host header (required to determine the target)".to_string(),
         )
     })?;
-    let (host, port) = split_host_port(&host_header);
+    let (host, port) = split_host_port(&host_header)?;
     Ok(RawRequest {
         method,
         target,
@@ -156,6 +175,7 @@ fn parse_origin_form(
         scheme: None,
         host_header,
         headers,
+        had_body: false,
     })
 }
 
@@ -209,6 +229,7 @@ fn parse_absolute_form(
         scheme: Some(url.scheme().to_string()),
         host_header,
         headers,
+        had_body: false,
     })
 }
 
@@ -229,19 +250,35 @@ fn is_managed_header(name: &str) -> bool {
         .any(|managed| name.eq_ignore_ascii_case(managed))
 }
 
+/// Whether a byte is an RFC 7230 token character (`tchar`), the set a valid HTTP
+/// method is built from. Used to sanity-check the request line's method.
+fn is_tchar(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
 /// Split a `Host` header value into host and optional port.
 ///
 /// Only a trailing all-numeric segment is treated as a port, so unbracketed
 /// values are not mistaken for ports. Bracketed IPv6 literals such as
 /// `[::1]:8080` are split correctly; the brackets are preserved on the host.
-fn split_host_port(host_value: &str) -> (String, Option<u16>) {
+///
+/// A trailing all-digit segment that overflows `u16` (e.g. `:99999`) is a clear
+/// authoring mistake, so it errors instead of being silently dropped to the
+/// scheme's default port.
+fn split_host_port(host_value: &str) -> Result<(String, Option<u16>)> {
     match host_value.rsplit_once(':') {
         Some((host, port))
             if !host.is_empty() && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) =>
         {
-            (host.to_string(), port.parse::<u16>().ok())
+            let parsed = port.parse::<u16>().map_err(|_| {
+                SmugglexError::InvalidInput(format!(
+                    "invalid port '{}' in Host header '{}' (must be 0-65535)",
+                    port, host_value
+                ))
+            })?;
+            Ok((host.to_string(), Some(parsed)))
         }
-        _ => (host_value.to_string(), None),
+        _ => Ok((host_value.to_string(), None)),
     }
 }
 
@@ -534,16 +571,67 @@ mod tests {
     #[test]
     fn split_host_port_ignores_non_numeric() {
         assert_eq!(
-            split_host_port("example.com"),
+            split_host_port("example.com").unwrap(),
             ("example.com".to_string(), None)
         );
         assert_eq!(
-            split_host_port("example.com:443"),
+            split_host_port("example.com:443").unwrap(),
             ("example.com".to_string(), Some(443))
         );
         assert_eq!(
-            split_host_port("[::1]:8080"),
+            split_host_port("[::1]:8080").unwrap(),
             ("[::1]".to_string(), Some(8080))
         );
+    }
+
+    #[test]
+    fn split_host_port_errors_on_out_of_range_port() {
+        // All-digit but > 65535: a clear authoring mistake, not "no port".
+        let err = split_host_port("example.com:99999").unwrap_err();
+        assert!(matches!(err, SmugglexError::InvalidInput(_)));
+        // And it surfaces through the full parse path.
+        let raw = "GET /x HTTP/1.1\r\nHost: example.com:99999\r\n\r\n";
+        assert!(matches!(
+            parse_raw_request(raw).unwrap_err(),
+            SmugglexError::InvalidInput(_)
+        ));
+    }
+
+    #[test]
+    fn errors_on_non_http_first_line() {
+        // Pointing --raw-request at an accidental JSON/HTML file must fail fast with
+        // a clear message rather than scanning a garbage method/target.
+        for junk in [
+            "{\"foo\": \"bar\"}\r\n\r\n",
+            "<!DOCTYPE html>\r\n<html></html>\r\n",
+        ] {
+            let err = parse_raw_request(junk).unwrap_err();
+            assert!(
+                matches!(err, SmugglexError::InvalidInput(_)),
+                "junk: {}",
+                junk
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_uncommon_but_valid_method_tokens() {
+        // Custom/WebDAV methods are valid RFC 7230 tokens and must still parse.
+        for m in ["PROPFIND", "MKCOL", "X-CUSTOM"] {
+            let raw = format!("{} /x HTTP/1.1\r\nHost: h\r\n\r\n", m);
+            assert_eq!(parse_raw_request(&raw).unwrap().method, m);
+        }
+    }
+
+    #[test]
+    fn records_presence_of_message_body() {
+        let with_body = "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 3\r\n\r\nabc";
+        assert!(parse_raw_request(with_body).unwrap().had_body);
+
+        // No body, or only a trailing blank line, is not counted as a body.
+        let no_body = "GET /x HTTP/1.1\r\nHost: h\r\n\r\n";
+        assert!(!parse_raw_request(no_body).unwrap().had_body);
+        let trailing_blank = "GET /x HTTP/1.1\r\nHost: h\r\n\r\n\r\n";
+        assert!(!parse_raw_request(trailing_blank).unwrap().had_body);
     }
 }

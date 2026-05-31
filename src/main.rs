@@ -260,6 +260,15 @@ fn apply_raw_request(cli: &mut Cli) -> Result<String> {
     // separately and verbatim via cli.raw_target so its exact bytes survive.
     let connect_url = raw.connect_url(&cli.raw_request_proto);
 
+    // The captured body is intentionally discarded (the payloads craft their own);
+    // note it in verbose mode so the user isn't surprised it had no effect.
+    if raw.had_body && cli.verbose && !is_machine() {
+        log(
+            LogLevel::Info,
+            "captured request body ignored; smuggling payloads generate their own body",
+        );
+    }
+
     // The captured request's method wins, so warn if the user also passed an
     // explicit --method (anything other than the default) that we're discarding.
     let user_set_method = cli.method != smugglex::cli::DEFAULT_METHOD;
