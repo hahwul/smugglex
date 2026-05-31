@@ -21,7 +21,11 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.event.workflow_run.head_branch }}
+          # Manual dispatch reads the PKGBUILD from the default branch (latest
+          # recipe); the package source itself is fetched from the v$pkgver tag
+          # tarball at build time, so the recipe need not come from the tag.
+          # Auto runs (after Release) use the released ref.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.event.repository.default_branch }}
 
       - name: Get Version
         id: get_version
