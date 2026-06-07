@@ -117,13 +117,15 @@ impl ResponseHeaderFingerprint {
         let mut fp = ResponseHeaderFingerprint::default();
         for line in head.lines() {
             if let Some((name, value)) = line.split_once(':') {
-                let name_lower = name.trim().to_ascii_lowercase();
-                let value_trim = value.trim().to_ascii_lowercase();
-                match name_lower.as_str() {
-                    "content-type" => fp.content_type = Some(value_trim),
-                    "server" => fp.server = Some(value_trim),
-                    "content-length" => fp.content_length = Some(value_trim),
-                    _ => {}
+                let name = name.trim();
+                // Only allocate the lowercased value for the three headers we
+                // track, instead of lowercasing every header's name and value.
+                if name.eq_ignore_ascii_case("content-type") {
+                    fp.content_type = Some(value.trim().to_ascii_lowercase());
+                } else if name.eq_ignore_ascii_case("server") {
+                    fp.server = Some(value.trim().to_ascii_lowercase());
+                } else if name.eq_ignore_ascii_case("content-length") {
+                    fp.content_length = Some(value.trim().to_ascii_lowercase());
                 }
             }
         }
@@ -704,9 +706,19 @@ async fn confirm_vulnerability(
         }
     }
 
+    // "Status-only" means detection fired on the 408/504 status WITHOUT a timing
+    // anomaly. A timing anomaly requires BOTH duration > timing_threshold AND
+    // duration > MIN_DELAY_MS (see `is_delayed` in check_single_payload), so "no
+    // timing anomaly" is the negation of that conjunction — not merely
+    // `duration <= timing_threshold`. The old check missed the gray zone where
+    // timing_threshold < duration <= MIN_DELAY_MS, wrongly applying lenient
+    // strict-majority confirmation to what is really a status-only signal.
+    let attack_millis = initial.duration.as_millis();
+    let initial_has_timing_anomaly =
+        attack_millis > params.timing_threshold && attack_millis > MIN_DELAY_MS;
     let initial_is_status_only = !initial.is_connection_timeout
         && matches!(initial.status_code, Some(408) | Some(504))
-        && initial.duration.as_millis() <= params.timing_threshold;
+        && !initial_has_timing_anomaly;
 
     let confirmed = if initial.is_connection_timeout || initial_is_status_only {
         durations.len() == CONFIRMATION_RETRIES

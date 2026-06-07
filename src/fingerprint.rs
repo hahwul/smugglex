@@ -78,10 +78,12 @@ impl fmt::Display for FingerprintResult {
 fn parse_response_headers(response: &str) -> HashMap<String, String> {
     let mut headers = HashMap::new();
     for line in response.lines() {
-        if line.is_empty() || line.starts_with("HTTP/") {
+        if line.starts_with("HTTP/") {
             continue;
         }
-        // End of headers
+        // The first blank line terminates the header section; stop here so the
+        // response body is never parsed as headers. (Previously this used
+        // `continue`, letting body lines that contain ':' leak in as headers.)
         if line.trim().is_empty() {
             break;
         }
@@ -240,6 +242,19 @@ mod tests {
         let headers = parse_response_headers(response);
         assert_eq!(headers.get("server").unwrap(), "nginx/1.24.0");
         assert_eq!(headers.get("content-type").unwrap(), "text/html");
+    }
+
+    #[test]
+    fn parse_response_headers_stops_at_body_boundary() {
+        // Lines after the first blank line are the body and must NOT be parsed
+        // as headers, even when they look header-shaped.
+        let response =
+            "HTTP/1.1 200 OK\r\nServer: nginx\r\n\r\nx-fake-header: injected\r\nmore: body";
+        let headers = parse_response_headers(response);
+        assert_eq!(headers.get("server").map(String::as_str), Some("nginx"));
+        assert!(!headers.contains_key("x-fake-header"));
+        assert!(!headers.contains_key("more"));
+        assert_eq!(headers.len(), 1);
     }
 
     #[test]
