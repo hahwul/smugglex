@@ -41,6 +41,7 @@ struct ExploitParams<'a> {
     ports_str: &'a str,
     wordlist_path: Option<&'a str>,
     delay: u64,
+    smuggle_request: Option<&'a str>,
 }
 
 /// Outcome of scanning a single target. Used to collect results for batch JSON output
@@ -635,7 +636,10 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     // In machine/JSON mode we still allow payload export via the check phase, but skip exploit execution
     // to keep stdout clean and because exploit details are better consumed interactively.
     if let Some(ref exploit_str) = cli.exploit {
-        if found_vulnerability && !is_machine() {
+        // The `smuggle` exploit fires its payload directly and does not depend on
+        // a prior detection, so allow it to run even when the scan was quiet.
+        let smuggle_requested = exploit_str.split(',').any(|x| x.trim() == "smuggle");
+        if (found_vulnerability || smuggle_requested) && !is_machine() {
             let exploit_params = ExploitParams {
                 exploit_str,
                 results: &results,
@@ -649,6 +653,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                 ports_str: &cli.exploit_ports,
                 wordlist_path: cli.exploit_wordlist.as_deref(),
                 delay: cli.delay,
+                smuggle_request: cli.smuggle_request.as_deref(),
             };
             if let Err(e) = run_exploits(&exploit_params).await {
                 log(LogLevel::Error, &format!("exploit phase failed: {}", e));
@@ -857,6 +862,40 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     Err(e) => {
                         log(LogLevel::Error, &format!("path-fuzz exploit failed: {}", e));
                     }
+                }
+            }
+            "smuggle" => {
+                log(LogLevel::Info, "running smuggle exploit");
+
+                // Unlike the other exploits, this one does not require a prior
+                // detection — it just fires the smuggle (trying both CL.TE and
+                // TE.CL wrappers), so it can directly solve/confirm a target.
+
+                // Interpret \r\n / \n escapes so the inner request can be passed
+                // on one CLI line; fall back to the GPOST-solving default.
+                let inner_request = params
+                    .smuggle_request
+                    .map(|s| s.replace("\\r\\n", "\r\n").replace("\\n", "\n"))
+                    .unwrap_or_else(|| smugglex::exploit::DEFAULT_SMUGGLE_REQUEST.to_string());
+
+                let smuggle_params = smugglex::exploit::SmuggleParams {
+                    host: params.host,
+                    port: params.port,
+                    path: params.path,
+                    use_tls: params.use_tls,
+                    timeout: params.timeout,
+                    verbose: params.verbose,
+                    inner_request: inner_request.clone(),
+                    rounds: 6,
+                    delay: params.delay,
+                };
+                match smugglex::exploit::test_smuggle(&smuggle_params).await {
+                    Ok(result) => smugglex::exploit::print_smuggle_results(
+                        &result,
+                        params.target_url,
+                        &inner_request,
+                    ),
+                    Err(e) => log(LogLevel::Error, &format!("smuggle exploit failed: {}", e)),
                 }
             }
             _ => {
