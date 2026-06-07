@@ -1,0 +1,57 @@
+# Real HTTP request-smuggling lab for smugglex.
+#
+# Two proxy->backend chains that produce ACTUAL socket-level desync (not the
+# emulated status/timing of ../validate.py):
+#
+#   vulnerable : CL-framing frontend  +  TE-honouring backend   (they disagree)
+#   patched    : CL-framing frontend  +  CL-first   backend     (they agree)
+#
+# Bring it up:   docker compose up --build -d
+# Scan it:       smugglex http://127.0.0.1:8080/      # vulnerable -> findings
+#                smugglex http://127.0.0.1:8081/      # patched    -> clean
+# Tear down:     docker compose down
+#
+# Only scan THIS lab (or other targets you are authorized to test).
+
+services:
+  backend-te:
+    build: .
+    command: python backend.py
+    environment:
+      FRAMING: te # honour Transfer-Encoding over Content-Length
+      BIND_PORT: "8000"
+
+  frontend-vuln:
+    build: .
+    command: python frontend.py
+    environment:
+      BIND_PORT: "8080"
+      BACKEND_HOST: backend-te
+      BACKEND_PORT: "8000"
+      UPSTREAM_TIMEOUT: "6"
+      CLIENT_BODY_TIMEOUT: "0.7"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend-te
+
+  backend-cl:
+    build: .
+    command: python backend.py
+    environment:
+      FRAMING: cl # frame by the first Content-Length; ignore Transfer-Encoding
+      BIND_PORT: "8000"
+
+  frontend-safe:
+    build: .
+    command: python frontend.py
+    environment:
+      BIND_PORT: "8081"
+      BACKEND_HOST: backend-cl
+      BACKEND_PORT: "8000"
+      UPSTREAM_TIMEOUT: "6"
+      CLIENT_BODY_TIMEOUT: "0.7"
+    ports:
+      - "8081:8081"
+    depends_on:
+      - backend-cl
