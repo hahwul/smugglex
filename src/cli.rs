@@ -112,7 +112,8 @@ pub struct Cli {
     #[arg(help_heading = "OUTPUT", short = 'V', long, action = clap::ArgAction::SetTrue)]
     pub verbose: bool,
 
-    /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te,h2c,h2)
+    /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te,h2c,h2,cl-edge,h2-downgrade).
+    /// h2-downgrade speaks real HTTP/2 (ALPN h2) to detect H2.CL/H2.TE and runs only on https targets.
     #[arg(help_heading = "DETECT", short = 'c', long = "checks")]
     pub checks: Option<String>,
 

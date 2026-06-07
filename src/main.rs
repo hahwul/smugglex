@@ -497,7 +497,30 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
 
     let mut results = Vec::new();
     let mut found_vulnerability = false;
-    let total_checks = checks_to_run.len();
+
+    // The real-HTTP/2 downgrade check (H2.CL / H2.TE) speaks ALPN h2, so it only
+    // applies to https targets. It is not a payload-string check, so it lives
+    // outside `all_checks`; honour it when checks are unspecified or it is named.
+    let h2_explicitly_requested = matches!(
+        cli.checks,
+        Some(ref s) if s.split(',').any(|x| x.trim() == "h2-downgrade")
+    );
+    let h2_downgrade_selected = use_tls && (cli.checks.is_none() || h2_explicitly_requested);
+    if !is_machine() {
+        if h2_explicitly_requested && !use_tls {
+            log(
+                LogLevel::Warning,
+                "h2-downgrade requires an https target (ALPN h2); skipping it for this non-TLS URL",
+            );
+        }
+        if h2_downgrade_selected && cli.proxy.is_some() {
+            log(
+                LogLevel::Warning,
+                "h2-downgrade connects directly and does not route through --proxy",
+            );
+        }
+    }
+    let total_checks = checks_to_run.len() + h2_downgrade_selected as usize;
 
     for (i, (check_name, payload_fn)) in checks_to_run.iter().enumerate() {
         if cli.exit_first && found_vulnerability {
@@ -567,6 +590,30 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                 pb.inc(1);
             }
         }
+    }
+
+    // Real HTTP/2 downgrade smuggling (H2.CL / H2.TE) over ALPN h2. Runs after
+    // the HTTP/1.1 checks because it uses a genuine HTTP/2 client rather than a
+    // payload string.
+    if h2_downgrade_selected && !(cli.exit_first && found_vulnerability) {
+        if !cli.verbose && !is_machine() {
+            pb.set_message(format!(
+                "[{}/{}] checking h2-downgrade",
+                total_checks, total_checks
+            ));
+        }
+        let result = smugglex::http2::run_h2_downgrade_check(
+            host,
+            port,
+            host_header,
+            path,
+            cli.timeout,
+            network_verbose,
+        )
+        .await;
+        found_vulnerability |= result.vulnerable;
+        results.push(result);
+        pb.inc(1);
     }
 
     if !cli.verbose && !is_machine() {

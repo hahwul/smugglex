@@ -3,6 +3,7 @@ pub mod error;
 pub mod exploit;
 pub mod fingerprint;
 pub mod http;
+pub mod http2;
 pub mod model;
 pub mod mutator;
 pub mod output;

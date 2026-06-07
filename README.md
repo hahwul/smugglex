@@ -18,7 +18,7 @@
 
 ## Overview
 
-Smugglex is a security testing tool that detects HTTP Request Smuggling vulnerabilities in web applications. It tests for CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling attacks.
+Smugglex is a security testing tool that detects HTTP Request Smuggling vulnerabilities in web applications. It tests for CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling attacks, and — on HTTPS targets — speaks real HTTP/2 (ALPN `h2`) to detect HTTP/2&rarr;HTTP/1.1 downgrade smuggling (H2.CL / H2.TE) via the `h2-downgrade` check.
 
 For detailed documentation, visit [smugglex.hahwul.com](https://smugglex.hahwul.com).
 
