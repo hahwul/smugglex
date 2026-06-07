@@ -177,18 +177,16 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Returns true once `body` holds a complete HTTP/1.1 chunked message: a run of
-/// size-prefixed chunks ending in a zero-size chunk whose (possibly empty)
-/// trailer section is terminated by CRLF. Tolerates chunk extensions (`;ext`)
-/// and trailer headers, so it does not stop short of — or past — the real end.
-fn chunked_body_complete(body: &[u8]) -> bool {
+/// Returns the byte length of a complete HTTP/1.1 chunked message in `body` (the
+/// index just past the terminating CRLF-CRLF), or `None` if it is not yet
+/// complete. A run of size-prefixed chunks ends in a zero-size chunk whose
+/// (possibly empty) trailer section is terminated by CRLF. Tolerates chunk
+/// extensions (`;ext`) and trailer headers.
+fn chunked_body_end(body: &[u8]) -> Option<usize> {
     let mut i = 0usize;
     loop {
         // Locate the CRLF that ends the chunk-size line.
-        let rel = match find_subsequence(&body[i..], b"\r\n") {
-            Some(p) => p,
-            None => return false, // size line not fully received yet
-        };
+        let rel = find_subsequence(&body[i..], b"\r\n")?; // size line not fully received
         let line_end = i + rel; // index of the '\r' ending the size line
         // Chunk size is hex, optionally followed by ';'-delimited extensions.
         let size_tok = body[i..line_end]
@@ -196,17 +194,13 @@ fn chunked_body_complete(body: &[u8]) -> bool {
             .next()
             .unwrap_or(&[])
             .trim_ascii();
-        let size = match std::str::from_utf8(size_tok)
+        let size = std::str::from_utf8(size_tok)
             .ok()
-            .and_then(|s| usize::from_str_radix(s, 16).ok())
-        {
-            Some(n) => n,
-            None => return false, // malformed — let the outer timeout/EOF decide
-        };
+            .and_then(|s| usize::from_str_radix(s, 16).ok())?; // malformed — defer
         if size == 0 {
             // Last chunk: complete once the terminating CRLF-CRLF of the trailer
             // section has arrived (zero or more trailer headers in between).
-            return find_subsequence(&body[line_end..], b"\r\n\r\n").is_some();
+            return find_subsequence(&body[line_end..], b"\r\n\r\n").map(|p| line_end + p + 4);
         }
         // Skip the CRLF after the size line, the chunk data, and its trailing
         // CRLF. Use fully-checked arithmetic so a hostile server advertising a
@@ -217,9 +211,146 @@ fn chunked_body_complete(body: &[u8]) -> bool {
             .and_then(|advance| line_end.checked_add(advance))
         {
             Some(next) if next <= body.len() => i = next,
-            _ => return false, // chunk data not fully received (or overflow)
+            _ => return None, // chunk data not fully received (or overflow)
         }
     }
+}
+
+/// True once `body` holds a complete chunked message.
+fn chunked_body_complete(body: &[u8]) -> bool {
+    chunked_body_end(body).is_some()
+}
+
+/// If `buf` starts with a complete HTTP/1.x response, return its total byte
+/// length; otherwise `None`. `None` for `Connection: close`-style responses with
+/// no length signal — those are only complete at EOF.
+fn response_complete_len(buf: &[u8]) -> Option<usize> {
+    let pos = find_subsequence(buf, b"\r\n\r\n")?;
+    let header_end = pos + 4;
+    match detect_framing(&buf[..pos]) {
+        BodyFraming::ContentLength(n) => {
+            let total = header_end.checked_add(n)?;
+            (buf.len() >= total).then_some(total)
+        }
+        BodyFraming::Chunked => chunked_body_end(&buf[header_end..]).map(|l| header_end + l),
+        BodyFraming::ReadToClose => None,
+    }
+}
+
+/// Read one complete HTTP/1.x response, carrying any bytes that belong to the
+/// *next* response in `carry` so the connection can be read again. This is what
+/// makes response-queue capture work: when a smuggled request's response arrives
+/// glued to the previous one, the surplus is preserved for the next read instead
+/// of being discarded. Returns `None` at EOF with nothing buffered.
+async fn read_one_framed<S: AsyncRead + Unpin + ?Sized>(
+    stream: &mut S,
+    carry: &mut Vec<u8>,
+) -> Result<Option<Vec<u8>>> {
+    let mut tmp = [0u8; 8192];
+    loop {
+        if let Some(end) = response_complete_len(carry) {
+            let resp = carry.drain(..end).collect();
+            return Ok(Some(resp));
+        }
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            // EOF: a length-less (Connection: close) response ends here.
+            if carry.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(std::mem::take(carry)));
+        }
+        carry.extend_from_slice(&tmp[..n]);
+    }
+}
+
+/// Read exactly one complete HTTP/1.x response from `stream`, stopping as soon
+/// as the message is complete per its framing (Content-Length / chunked) rather
+/// than waiting for EOF. This lets the connection be reused for the next request
+/// (pipelining) and avoids blocking on keep-alive idle time. `?Sized` so trait
+/// objects (the boxed TLS/TCP stream) can be passed by `&mut`.
+async fn read_one_http_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -> Result<Vec<u8>> {
+    let mut buf: Vec<u8> = Vec::with_capacity(8192);
+    let mut tmp = [0u8; 8192];
+    let mut header_end: Option<usize> = None;
+    let mut framing = BodyFraming::ReadToClose;
+    loop {
+        if let Some(he) = header_end {
+            match framing {
+                BodyFraming::ContentLength(len) => {
+                    if buf.len() >= he + len {
+                        break;
+                    }
+                }
+                BodyFraming::Chunked => {
+                    if chunked_body_complete(&buf[he..]) {
+                        break;
+                    }
+                }
+                BodyFraming::ReadToClose => {}
+            }
+        }
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            break; // peer closed the connection
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if header_end.is_none()
+            && let Some(pos) = find_subsequence(&buf, b"\r\n\r\n")
+        {
+            header_end = Some(pos + 4);
+            framing = detect_framing(&buf[..pos]);
+        }
+    }
+    Ok(buf)
+}
+
+/// Send several requests over a *single* persistent connection, reading one
+/// complete response after each. Used to exploit response-queue desync: a
+/// smuggled request's response is delivered to a *later* request on the same
+/// connection, so capturing that offset response reveals the smuggled
+/// request's result (e.g. an admin panel reached past a front-end control).
+///
+/// The whole exchange is bounded by `timeout`; on timeout the responses
+/// collected so far are returned.
+pub async fn pipeline_requests(
+    host: &str,
+    port: u16,
+    requests: &[String],
+    timeout: u64,
+    verbose: bool,
+    use_tls: bool,
+) -> Result<Vec<String>> {
+    let timeout_dur = Duration::from_secs(timeout);
+    let bytes = tokio::time::timeout(timeout_dur, async {
+        let mut stream = get_stream(host, port, use_tls).await?;
+        let mut responses: Vec<Vec<u8>> = Vec::with_capacity(requests.len());
+        // Bytes already read that belong to a later response (the response-queue
+        // offset that capture relies on) are carried between reads.
+        let mut carry: Vec<u8> = Vec::new();
+        for request in requests {
+            if verbose {
+                println!("\n{}", "--- PIPELINED REQUEST ---".bold().blue());
+                println!("{}", request.cyan());
+            }
+            stream.write_all(request.as_bytes()).await?;
+            match read_one_framed(&mut *stream, &mut carry).await? {
+                Some(resp) => responses.push(resp),
+                None => break, // peer closed with nothing left to read
+            }
+        }
+        Ok::<Vec<Vec<u8>>, crate::error::SmugglexError>(responses)
+    })
+    .await
+    .unwrap_or_else(|_| Ok(Vec::new()))?;
+
+    Ok(bytes
+        .into_iter()
+        .map(|b| match String::from_utf8(b) {
+            Ok(s) => s,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        })
+        .collect())
 }
 
 /// Sends a raw HTTP request and returns the response and duration.
@@ -242,48 +373,8 @@ pub async fn send_request(
     let result = tokio::time::timeout(timeout_dur, async {
         let mut stream = get_stream(host, port, use_tls).await?;
         stream.write_all(request.as_bytes()).await?;
-
-        // Read exactly one complete HTTP/1.x response. We stop as soon as the
-        // message is complete per its framing (Content-Length / chunked) rather
-        // than waiting for EOF: attack payloads use `Connection: keep-alive`, so
-        // the server holds the socket open after replying and a plain
-        // `read_to_end` would block until the timeout on *every* request —
-        // drowning the timing signal in keep-alive idle time. A genuinely
-        // desynced backend that never completes a response still trips the
-        // outer timeout, preserving the smuggling signal.
-        let mut buf: Vec<u8> = Vec::with_capacity(8192);
-        let mut tmp = [0u8; 8192];
-        let mut header_end: Option<usize> = None;
-        let mut framing = BodyFraming::ReadToClose;
-        loop {
-            if let Some(he) = header_end {
-                match framing {
-                    BodyFraming::ContentLength(len) => {
-                        if buf.len() >= he + len {
-                            break;
-                        }
-                    }
-                    BodyFraming::Chunked => {
-                        if chunked_body_complete(&buf[he..]) {
-                            break;
-                        }
-                    }
-                    BodyFraming::ReadToClose => {}
-                }
-            }
-            let n = stream.read(&mut tmp).await?;
-            if n == 0 {
-                break; // peer closed the connection
-            }
-            buf.extend_from_slice(&tmp[..n]);
-            if header_end.is_none()
-                && let Some(pos) = find_subsequence(&buf, b"\r\n\r\n")
-            {
-                header_end = Some(pos + 4);
-                framing = detect_framing(&buf[..pos]);
-            }
-        }
-        Ok::<Vec<u8>, crate::error::SmugglexError>(buf)
+        // Read exactly one complete HTTP/1.x response (see read_one_http_response).
+        read_one_http_response(&mut *stream).await
     })
     .await??;
 

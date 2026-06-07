@@ -133,13 +133,15 @@ pub struct Cli {
     #[arg(help_heading = "DETECT", long = "fuzz-seed", default_value_t = 42)]
     pub fuzz_seed: u64,
 
-    /// Exploit types to run after detection (comma-separated: localhost-access,path-fuzz,smuggle)
+    /// Exploit types to run after detection (comma-separated:
+    /// localhost-access,path-fuzz,smuggle,capture)
     #[arg(help_heading = "EXPLOIT", short = 'e', long = "exploit")]
     pub exploit: Option<String>,
 
-    /// Inner request to smuggle to the back-end for the `smuggle` exploit
-    /// (raw request line + headers; use \r\n for line breaks). Defaults to a
-    /// request that makes the back-end process the method GPOST.
+    /// Inner request for the `smuggle`/`capture` exploits (raw request line +
+    /// headers; use \r\n for line breaks). For `smuggle` it defaults to a request
+    /// that makes the back-end process method GPOST; for `capture` it defaults to
+    /// `GET /admin` (whose smuggled response is then recovered).
     #[arg(help_heading = "EXPLOIT", long = "smuggle-request")]
     pub smuggle_request: Option<String>,
 
