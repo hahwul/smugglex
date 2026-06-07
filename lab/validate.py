@@ -412,7 +412,14 @@ def run_smugglex_against(port: int) -> dict:
     start = out.find("{")
     if start < 0:
         raise RuntimeError(f"no JSON in smugglex output:\nstdout={out!r}\nstderr={proc.stderr!r}")
-    return json.loads(out[start:])
+    raw = json.loads(out[start:])
+    # smugglex emits a batch envelope: {results: [{checks: [...]}], summary}.
+    # Normalize to a flat {"checks": [...]} for the evaluator, flattening every
+    # target's checks. Fall back to a bare ScanResults if the format changes.
+    if "results" in raw:
+        checks = [c for r in raw["results"] for c in r.get("checks", [])]
+        return {"checks": checks}
+    return raw
 
 
 def evaluate_scenario(sc: Scenario) -> tuple[str, bool, list[str], str]:
