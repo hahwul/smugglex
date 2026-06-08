@@ -70,11 +70,21 @@ cargo build --release
 ./target/release/smugglex http://127.0.0.1:8081/
 ```
 
-Expected (vulnerable `:8080`): the CL.TE check fires at **high** confidence with
-signals such as `status_504`, a multi-second `timing_anomaly`, and
-`body_divergence_vs_control` — the ~6 s timing is the back-end genuinely hanging
-on a truncated chunk until the frontend's `UPSTREAM_TIMEOUT` fires (504). The
-smuggle exploit prints `CL.TE [TE:plain]: [200, 405, 405, …]` and
+Expected (vulnerable `:8080`): the scan reports the chain as vulnerable (exit
+code `1`) via two complementary pathways:
+
+- The **`cl-te`** check fires through the **second-request probe**
+  (`second_request_desync`, `followup_divergence`, medium confidence). The
+  CL.TE attack body (`0\r\n\r\nG`) carries a *complete* chunk, so the attack
+  request itself gets a clean, fast `200` — no timing or status anomaly. The
+  surplus `G` poisons the shared backend connection, so the *next* request is
+  reframed (`GGET …` → backend `405`), which the probe observes as follow-up
+  divergence from the baseline.
+- The **`te-cl`** check fires through `status_504` and a multi-second
+  `timing_anomaly`: its incomplete-chunk payloads leave the TE backend blocked
+  reading a truncated chunk until the frontend's `UPSTREAM_TIMEOUT` fires (504).
+
+The smuggle exploit prints `CL.TE [TE:plain]: [200, 405, 405, …]` and
 `Smuggle delivered`.
 
 Expected (patched `:8081`): **no** checks vulnerable, no smuggle delivered.
