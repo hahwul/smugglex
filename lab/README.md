@@ -1,18 +1,19 @@
 # Lab — end-to-end validation harness
 
-A Python harness that runs the **actual** `smugglex` binary against a set of
-local mock backends and asserts that each scenario produces the expected
-verdict and detection signals. Complements `cargo test`, which exercises the
-library in isolation, by verifying the full CLI → output pipeline against a
-sweep of true-positive and false-positive scenarios.
+A [Crystal](https://crystal-lang.org) harness that runs the **actual**
+`smugglex` binary against a set of local mock backends and asserts that each
+scenario produces the expected verdict and detection signals. Complements
+`cargo test`, which exercises the library in isolation, by verifying the full
+CLI → output pipeline against a sweep of true-positive and false-positive
+scenarios.
 
 ## Usage
 
 ```sh
-just lab               # builds release binary + runs validate.py
+just lab               # builds release binary + runs validate.cr
 # or directly:
 cargo build --release
-python3 lab/validate.py
+crystal run lab/validate.cr
 ```
 
 Exits 0 if every scenario matches its expected outcome, non-zero otherwise.
@@ -21,7 +22,7 @@ Exits 0 if every scenario matches its expected outcome, non-zero otherwise.
 
 Each scenario is a small socket-level "backend" that produces a deterministic
 response pattern. The harness runs `smugglex --quiet --format json --checks
-cl-te --max-payloads 5 http://127.0.0.1:<port>/` against each and compares:
+cl-te --timeout 6 http://127.0.0.1:<port>/` against each and compares:
 
 1. **Verdict** — was `vulnerable` reported as expected?
 2. **Required signals** — for true-positive scenarios, the harness asserts
@@ -59,26 +60,37 @@ the named signal can rescue the finding from the standard FP rejection rules
 
 ## Adding a scenario
 
-Add a handler function to `validate.py`:
+Add a handler method to `validate.cr`:
 
-```python
-def my_scenario(sock, req, n):
-    # `sock` is the accepted client socket
-    # `req`  is the raw HTTP request bytes (headers up to \r\n\r\n)
-    # `n`    is the per-listener request count (1-indexed)
-    sock.sendall(http_response(NORMAL_BODY))
+```crystal
+def my_scenario(sock : TCPSocket, req : Bytes, n : Int32)
+  # `sock` is the accepted client socket
+  # `req`  is the raw HTTP request bytes (headers up to \r\n\r\n)
+  # `n`    is the per-listener request count (1-indexed)
+  sock.write(http_response(NORMAL_BODY))
+end
 ```
 
 Then register it in the `SCENARIOS` list with the expected verdict and (for
-positives) the required signal substring(s).
+positives) the required signal substring(s):
+
+```crystal
+Scenario.new(
+  "TP_my_scenario",
+  ->my_scenario(TCPSocket, Bytes, Int32),
+  expected_vulnerable: true,
+  required_signal_substrings: ["timing_anomaly"],
+)
+```
 
 ## Limitations
 
 - The mock backends emulate the externally observable behavior of vulnerable
   proxy/backend chains rather than performing actual HTTP desync. Good
   enough to validate detection-pipeline behavior; not a substitute for
-  testing against real proxy software.
-- `--max-payloads 5` caps the per-check payload count to keep the harness
-  runtime bounded. FP scenarios where every TE variation triggers detection
-  + control rejection would otherwise spend tens of seconds per payload
-  iterating through the full ~30-payload set.
+  testing against real proxy software — for that, see the real socket-level
+  desync lab in [`desync/`](desync/README.md).
+- FP scenarios self-bound their runtime via the scanner's consecutive-FP early
+  termination (no `--max-payloads` cap), so a scenario where every TE variation
+  triggers detection + control rejection aborts instead of iterating through
+  the full payload set.

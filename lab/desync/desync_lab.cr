@@ -20,7 +20,7 @@
 # Vulnerable:  FRAMING=te  (frontend CL  vs backend TE -> desync)
 # Patched:     FRAMING=cl  (both frame by first Content-Length -> no desync)
 #
-# Run:   crystal run lab/desync/crystal/desync_lab.cr
+# Run:   crystal run lab/desync/desync_lab.cr
 # Scan:  smugglex http://127.0.0.1:9000/
 #        smugglex --exploit smuggle http://127.0.0.1:9000/
 

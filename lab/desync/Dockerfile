@@ -1,8 +1,12 @@
-FROM python:3.12-slim
-
+FROM crystallang/crystal:1.20-alpine AS build
 WORKDIR /app
-# Pure standard-library scripts — no pip dependencies.
-COPY backend.py frontend.py ./
+COPY desync_lab.cr .
+RUN crystal build --release desync_lab.cr -o desync_lab
 
-# Overridden per service in docker-compose.yml.
-CMD ["python", "frontend.py"]
+FROM alpine:3.20
+RUN apk add --no-cache gc pcre2 libevent
+COPY --from=build /app/desync_lab /usr/local/bin/desync_lab
+# Bind the proxy on all interfaces so it is reachable from outside the container.
+ENV BIND_HOST=0.0.0.0
+EXPOSE 8080
+CMD ["desync_lab"]

@@ -65,4 +65,4 @@ lab:
     # Runs smugglex against local mock backends simulating canonical FP/TP
     # smuggling scenarios. Requires a release build (auto-built if missing).
     cargo build --release
-    python3 lab/validate.py
+    crystal run lab/validate.cr
