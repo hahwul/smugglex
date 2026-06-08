@@ -546,6 +546,11 @@ struct FollowupObservation {
     diverging: usize,
     /// Total number of follow-up probes actually sent (failures excluded).
     total: usize,
+    /// True when this observation came from the unconditional second-request
+    /// desync probe (i.e., the attack itself carried no direct anomaly and the
+    /// finding rests entirely on follow-up corruption). Used to emit the
+    /// `second_request_desync` signal.
+    second_request: bool,
 }
 
 impl FollowupObservation {
@@ -606,7 +611,116 @@ async fn observe_followup_divergence(
             }
         }
     }
-    FollowupObservation { diverging, total }
+    FollowupObservation {
+        diverging,
+        total,
+        second_request: false,
+    }
+}
+
+/// True when a follow-up probe status structurally diverges from the baseline:
+/// it differs from the baseline status AND is not a 5xx gateway/server error.
+/// 5xx responses (502/503/504) are flake-prone and already covered by the
+/// timing/status confirmation path, so excluding them keeps the unconditional
+/// second-request probe from firing on transient upstream errors.
+fn followup_status_diverged(status_code: Option<u16>, baseline_status: Option<u16>) -> bool {
+    match status_code {
+        Some(c) if c < 500 => status_code != baseline_status,
+        _ => false,
+    }
+}
+
+/// Send `FOLLOWUP_PROBE_COUNT` fresh-connection GET probes and count how many
+/// returned a response that *structurally* diverges from the baseline — a
+/// non-5xx status change (per `followup_status_diverged`) or a body-length
+/// divergence (per `bodies_diverge`). Stricter than `observe_followup_divergence`
+/// because it backs the unconditional second-request probe, where there is no
+/// prior anomaly to corroborate the finding.
+async fn count_structural_followup_divergence(
+    params: &PayloadCheckParams<'_>,
+    path: &str,
+    baseline: &BaselineMeasurement,
+) -> usize {
+    let probe = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, params.host
+    );
+    let mut diverging = 0usize;
+    for _ in 0..FOLLOWUP_PROBE_COUNT {
+        if let Ok((response, _)) = send_request(
+            params.host,
+            params.port,
+            &probe,
+            params.timeout,
+            params.verbose,
+            params.use_tls,
+        )
+        .await
+        {
+            let status_line = response.lines().next().unwrap_or("");
+            let status_code = parse_status_code(status_line);
+            // Skip 5xx responses entirely — gateway/server errors are
+            // flake-prone (overload, transient upstream failures) and are
+            // handled by the timing/status confirmation path, not the
+            // second-request probe. This also prevents a small 5xx error-page
+            // body from tripping the body-divergence check below.
+            if matches!(status_code, Some(c) if c >= 500) {
+                continue;
+            }
+            let body_len = response_body_length(&response);
+            if followup_status_diverged(status_code, baseline.status_code)
+                || bodies_diverge(body_len, baseline.body_length)
+            {
+                diverging += 1;
+            }
+        }
+    }
+    diverging
+}
+
+/// Unconditional second-request desync probe, run only when the main payload
+/// loop found no direct anomaly. Some CL.TE desyncs return a perfectly normal
+/// response to the smuggling request itself and only corrupt the *following*
+/// request on the shared proxy↔backend connection (the classic "second-request"
+/// smuggling signature). We plant the first TE-carrying payload, then send
+/// fresh follow-up GETs and look for structural divergence from the baseline.
+///
+/// To suppress transient backend flakiness the divergence must reproduce across
+/// two independent plant+probe sequences — a single corrupted follow-up is not
+/// enough. Returns a `FollowupObservation` (with `second_request = true`) only
+/// when both sequences observed divergence.
+async fn probe_second_request_desync(
+    params: &PayloadCheckParams<'_>,
+    path: &str,
+    baseline: &BaselineMeasurement,
+) -> Option<FollowupObservation> {
+    const PLANT_PROBE_SEQUENCES: usize = 2;
+    let mut diverging_min = usize::MAX;
+    for _ in 0..PLANT_PROBE_SEQUENCES {
+        // Plant: send the smuggling payload to corrupt the shared upstream
+        // connection. Its own response is irrelevant here — the main loop has
+        // already established it carries no direct anomaly.
+        let _ = send_request(
+            params.host,
+            params.port,
+            params.attack_request,
+            params.timeout,
+            params.verbose,
+            params.use_tls,
+        )
+        .await;
+        let d = count_structural_followup_divergence(params, path, baseline).await;
+        if d == 0 {
+            // Not reproduced → transient backend behavior, not a desync.
+            return None;
+        }
+        diverging_min = diverging_min.min(d);
+    }
+    Some(FollowupObservation {
+        diverging: diverging_min,
+        total: FOLLOWUP_PROBE_COUNT,
+        second_request: true,
+    })
 }
 
 /// True if attack and control responses have structurally different bodies
@@ -824,10 +938,13 @@ fn collect_detection_signals(
             signals.push(format!("header_divergence_vs_control:{}", header_diff));
         }
     }
-    if let Some(f) = followup
-        && f.has_divergence()
-    {
-        signals.push(format!("followup_divergence:{}/{}", f.diverging, f.total));
+    if let Some(f) = followup {
+        if f.has_divergence() {
+            signals.push(format!("followup_divergence:{}/{}", f.diverging, f.total));
+        }
+        if f.second_request {
+            signals.push("second_request_desync".to_string());
+        }
     }
     signals
 }
@@ -1110,6 +1227,55 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                     );
                 }
             }
+        }
+    }
+
+    // Second-request desync probe: only when the main loop found no direct
+    // anomaly and did not early-terminate. Catches CL.TE desyncs whose attack
+    // response is itself benign and only the FOLLOWING request on the shared
+    // upstream connection is corrupted.
+    if vulnerability_info.is_none()
+        && early_termination.is_none()
+        && let Some((idx, plant_payload)) = params
+            .attack_requests
+            .iter()
+            .enumerate()
+            .find(|(_, p)| payload_eligible_for_control(p))
+    {
+        let payload_params = PayloadCheckParams {
+            host: params.host,
+            port: params.port,
+            attack_request: plant_payload,
+            timeout: params.timeout,
+            verbose: params.verbose,
+            use_tls: params.use_tls,
+            timing_threshold,
+            baseline_status_codes: &baseline.observed_status_codes,
+        };
+        if let Some(followup) =
+            probe_second_request_desync(&payload_params, params.path, &baseline).await
+        {
+            if params.verbose {
+                println!(
+                    "  {} {} second-request desync detected: {}/{} follow-up probes diverged from baseline",
+                    "[+]".green(),
+                    params.check_name,
+                    followup.diverging,
+                    followup.total,
+                );
+            }
+            // The attack request itself carried no anomaly — synthesize a
+            // benign VulnerabilityInfo so the finding is reported as a
+            // medium-confidence second-request desync.
+            let info = VulnerabilityInfo {
+                status: normal_status.clone(),
+                status_code: baseline.status_code,
+                duration: normal_duration,
+                body_length: baseline.body_length,
+                header_fingerprint: ResponseHeaderFingerprint::default(),
+                is_connection_timeout: false,
+            };
+            vulnerability_info = Some((idx, plant_payload.clone(), info, None, Some(followup)));
         }
     }
 
@@ -1540,6 +1706,7 @@ mod tests {
         let followup = FollowupObservation {
             diverging: 2,
             total: 3,
+            second_request: false,
         };
         // Without follow-up: timing similarity would reject as FP. With
         // follow-up divergence: escape clause keeps the finding.
@@ -1570,6 +1737,7 @@ mod tests {
         let followup = FollowupObservation {
             diverging: 0,
             total: 3,
+            second_request: false,
         };
         // No follow-up divergence + similar timing → standard FP rule fires.
         assert!(control_indicates_false_positive(
@@ -1580,15 +1748,72 @@ mod tests {
     }
 
     #[test]
+    fn followup_status_diverged_flags_non_5xx_change() {
+        // A 4xx/3xx follow-up where the baseline was 200 is a structural divergence.
+        assert!(followup_status_diverged(Some(405), Some(200)));
+        assert!(followup_status_diverged(Some(400), Some(200)));
+        assert!(followup_status_diverged(Some(301), Some(200)));
+    }
+
+    #[test]
+    fn followup_status_diverged_ignores_5xx() {
+        // 5xx responses are flake-prone and must NOT drive the second-request
+        // probe, even when they differ from the baseline.
+        assert!(!followup_status_diverged(Some(504), Some(200)));
+        assert!(!followup_status_diverged(Some(502), Some(200)));
+        assert!(!followup_status_diverged(Some(503), Some(200)));
+        assert!(!followup_status_diverged(None, Some(200)));
+    }
+
+    #[test]
+    fn followup_status_diverged_false_when_matching() {
+        assert!(!followup_status_diverged(Some(200), Some(200)));
+        assert!(!followup_status_diverged(Some(404), Some(404)));
+    }
+
+    #[test]
+    fn second_request_signal_emitted() {
+        let info = VulnerabilityInfo {
+            status: "HTTP/1.1 200 OK".into(),
+            status_code: Some(200),
+            duration: Duration::from_millis(5),
+            body_length: 500,
+            header_fingerprint: ResponseHeaderFingerprint::default(),
+            is_connection_timeout: false,
+        };
+        let followup = FollowupObservation {
+            diverging: 1,
+            total: 3,
+            second_request: true,
+        };
+        let signals = collect_detection_signals(
+            &info,
+            Duration::from_millis(5),
+            100,
+            false,
+            None,
+            Some(&followup),
+        );
+        assert!(signals.iter().any(|s| s == "second_request_desync"));
+        assert!(
+            signals
+                .iter()
+                .any(|s| s.starts_with("followup_divergence:"))
+        );
+    }
+
+    #[test]
     fn followup_observation_reports_divergence() {
         let f = FollowupObservation {
             diverging: 1,
             total: 3,
+            second_request: false,
         };
         assert!(f.has_divergence());
         let none = FollowupObservation {
             diverging: 0,
             total: 3,
+            second_request: false,
         };
         assert!(!none.has_divergence());
     }

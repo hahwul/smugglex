@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+- Second-request desync detection: when a CL.TE/TE.CL/TE.TE check finds no direct anomaly, smugglex now plants a TE payload and probes fresh follow-up requests for structural divergence (non-5xx status or body) from the baseline, reproduced across two independent plant+probe sequences. This catches "second-request" smuggling where the attack response itself is a clean `200` and only the *following* request on the shared upstream connection is corrupted — including the real socket-level lab in `lab/desync/`, which was previously missed by the `cl-te` check. Surfaced via the new `second_request_desync` detection signal.
+- Lab harness scenarios (`lab/validate.cr`): three stateful `TP_second_request_*` true positives and three new false positives (`FP_followup_503_overload`, `FP_te_request_405`, `FP_transient_404`) guarding the new probe against 5xx overload, attack-response status differences, and non-recurring transients.
+
 ## 0.3.0
 
 ### Added

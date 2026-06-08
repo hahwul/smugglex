@@ -60,6 +60,52 @@ def has_nonzero_content_length?(req : Bytes) : Bool
   false
 end
 
+# Shared state for the stateful second-request ("second request") desync
+# scenarios. A genuine CL.TE desync poisons a *shared* upstream connection, so
+# the corruption manifests on the request that FOLLOWS the smuggling request
+# rather than on the smuggling request itself. We model that with a single
+# boolean: a TE-carrying request plants the poison (and itself gets a clean
+# 200); the next non-TE request consumes it and is reinterpreted by the
+# "backend". Reset between scenarios by the harness.
+class DesyncState
+  @@poisoned = false
+
+  def self.reset
+    @@poisoned = false
+  end
+
+  def self.plant!
+    @@poisoned = true
+  end
+
+  def self.poisoned? : Bool
+    @@poisoned
+  end
+
+  # Returns whether a poison was pending and clears it (consumed by one request).
+  def self.consume! : Bool
+    was = @@poisoned
+    @@poisoned = false
+    was
+  end
+end
+
+# One-shot GET counter for the transient-blip FP scenario. The harness sends a
+# fixed GET prologue (the timing baseline) before any follow-up probe, so a
+# deterministic GET index lets a scenario inject a single non-recurring blip.
+class GetCounter
+  @@count = 0
+
+  def self.reset
+    @@count = 0
+  end
+
+  def self.next : Int32
+    @@count += 1
+    @@count
+  end
+end
+
 # --------------------------- scenario implementations -----------------------
 
 # Always returns a normal fast response — nothing suspicious anywhere.
@@ -167,7 +213,101 @@ def tp_body_divergence(sock : TCPSocket, req : Bytes, n : Int32)
   end
 end
 
+# ---- Second-request (stateful) desync true positives ----
+
+# Classic second-request CL.TE: the smuggling (TE-carrying) request itself gets
+# a clean, fast 200 — NO timing/status anomaly on the attack response at all —
+# but it poisons the shared upstream connection so the FOLLOWING request is
+# reinterpreted by the backend and returns 405. The attack response carries no
+# direct signal, so the only detection pathway is the unconditional
+# second-request probe (plant + follow-up divergence). Before that probe
+# existed, smugglex missed this entirely.
+def tp_second_request_status(sock : TCPSocket, req : Bytes, n : Int32)
+  if has_transfer_encoding?(req)
+    DesyncState.plant!
+    sock.write(http_response(NORMAL_BODY)) # clean 200, fast — no anomaly
+  elsif DesyncState.consume!
+    sock.write(http_response("Method Not Allowed", status: "405 Method Not Allowed"))
+  else
+    sock.write(http_response(NORMAL_BODY))
+  end
+end
+
+# Second-request desync where the poisoned follow-up keeps the 200 status but
+# returns a structurally smaller body (the smuggled prefix truncated the
+# response). Exercises the body-divergence branch of the second-request probe
+# rather than the status-divergence branch.
+def tp_second_request_body(sock : TCPSocket, req : Bytes, n : Int32)
+  if has_transfer_encoding?(req)
+    DesyncState.plant!
+    sock.write(http_response(NORMAL_BODY))
+  elsif DesyncState.consume!
+    sock.write(http_response(SMALL_ERROR_BODY)) # 200 but tiny body → diverges
+  else
+    sock.write(http_response(NORMAL_BODY))
+  end
+end
+
+# Persistent desync: once the TE smuggling request poisons the shared upstream
+# connection it stays corrupted, so EVERY follow-up GET diverges (3/3) — the
+# backend is left mid-parse and never recovers until the connection is recycled.
+# Distinct from the single-shot 405 case (which consumes the poison after one
+# request) and exercises the probe's full-divergence path.
+def tp_second_request_persistent(sock : TCPSocket, req : Bytes, n : Int32)
+  if has_transfer_encoding?(req)
+    DesyncState.plant!
+    sock.write(http_response(NORMAL_BODY))
+  elsif DesyncState.poisoned? # stays poisoned — does not consume
+    sock.write(http_response("Bad Request", status: "400 Bad Request"))
+  else
+    sock.write(http_response(NORMAL_BODY))
+  end
+end
+
 # ---- Additional realistic FP scenarios ----
+
+# A single, one-off 404 blip on the first post-baseline follow-up GET that does
+# NOT recur. The second-request probe requires follow-up divergence to reproduce
+# across TWO independent plant+probe sequences, so a non-recurring transient must
+# be rejected. The harness sends 3 GET baseline probes first, so GET #4 is the
+# first follow-up of the probe's first sequence; the second sequence (GETs #7-9)
+# sees only clean 200s and breaks reproduction.
+def fp_transient_404(sock : TCPSocket, req : Bytes, n : Int32)
+  if request_starts_with?(req, "GET") && GetCounter.next == 4
+    sock.write(http_response("Not Found", status: "404 Not Found"))
+    return
+  end
+  sock.write(http_response(NORMAL_BODY))
+end
+
+# An upstream that is healthy for the baseline window but then becomes
+# overloaded and returns 503 (Service Unavailable, a 5xx) to every subsequent
+# request — including the second-request probe's follow-up GETs. 5xx follow-up
+# responses must be IGNORED by the second-request probe (gateway/server errors
+# are flake-prone and handled by the timing/status confirmation path), so even
+# though the 503 body differs sharply from the baseline body this must NOT flag.
+def fp_followup_503_overload(sock : TCPSocket, req : Bytes, n : Int32)
+  if n <= 3
+    sock.write(http_response(NORMAL_BODY)) # baseline window → healthy 200
+  else
+    sock.write(http_response("Service Unavailable", status: "503 Service Unavailable"))
+  end
+end
+
+# A backend that returns 405 to any request carrying a body (TE or non-zero CL)
+# — e.g. an endpoint that only accepts bodyless GET/HEAD — while plain follow-up
+# GETs return the normal 200. The smuggling (TE) request gets a 405, but that is
+# the attack response itself, not a poisoned follow-up: the follow-up GETs are
+# clean. A naive detector keying on "TE request returns a different status" would
+# flag; the second-request probe (which only inspects follow-ups) must not.
+def fp_te_request_405(sock : TCPSocket, req : Bytes, n : Int32)
+  body_present = has_transfer_encoding?(req) || has_nonzero_content_length?(req)
+  if body_present
+    sock.write(http_response("Method Not Allowed", status: "405 Method Not Allowed"))
+  else
+    sock.write(http_response(NORMAL_BODY))
+  end
+end
 
 # A WAF in front of a healthy backend rejects any request carrying
 # Transfer-Encoding with a small 403 body. Non-TE shapes pass through to
@@ -284,6 +424,24 @@ SCENARIOS = [
     expected_vulnerable: false,
     notes: "~5% transient 504s; strict-majority confirmation must suppress",
   ),
+  Scenario.new(
+    "FP_followup_503_overload",
+    ->fp_followup_503_overload(TCPSocket, Bytes, Int32),
+    expected_vulnerable: false,
+    notes: "post-baseline 503s; 5xx follow-ups must be ignored by second-request probe",
+  ),
+  Scenario.new(
+    "FP_te_request_405",
+    ->fp_te_request_405(TCPSocket, Bytes, Int32),
+    expected_vulnerable: false,
+    notes: "TE/body requests get 405 but follow-up GETs are clean — attack-response status diff is not desync",
+  ),
+  Scenario.new(
+    "FP_transient_404",
+    ->fp_transient_404(TCPSocket, Bytes, Int32),
+    expected_vulnerable: false,
+    notes: "one-off 404 on a single follow-up; second-request probe's reproduction requirement must reject",
+  ),
   # Positives (must flag)
   Scenario.new(
     "TP_clte_status",
@@ -312,6 +470,27 @@ SCENARIOS = [
     expected_vulnerable: true,
     required_signal_substrings: ["body_divergence_vs_control"],
     notes: "TE response body diverges from control body despite timing match",
+  ),
+  Scenario.new(
+    "TP_second_request_status",
+    ->tp_second_request_status(TCPSocket, Bytes, Int32),
+    expected_vulnerable: true,
+    required_signal_substrings: ["second_request_desync"],
+    notes: "attack response is a clean 200; only the poisoned follow-up (405) reveals the desync",
+  ),
+  Scenario.new(
+    "TP_second_request_body",
+    ->tp_second_request_body(TCPSocket, Bytes, Int32),
+    expected_vulnerable: true,
+    required_signal_substrings: ["second_request_desync"],
+    notes: "poisoned follow-up keeps 200 but returns a truncated body — body-divergence path of the probe",
+  ),
+  Scenario.new(
+    "TP_second_request_persistent",
+    ->tp_second_request_persistent(TCPSocket, Bytes, Int32),
+    expected_vulnerable: true,
+    required_signal_substrings: ["second_request_desync"],
+    notes: "persistent poison — every follow-up diverges (3/3) until the upstream connection recycles",
   ),
 ]
 
@@ -417,6 +596,10 @@ record Evaluation,
   summary : String
 
 def evaluate_scenario(sc : Scenario) : Evaluation
+  # Stateful scenarios share a single poison flag; clear it so each scenario
+  # starts from a clean upstream connection.
+  DesyncState.reset
+  GetCounter.reset
   server = TCPServer.new("127.0.0.1", 0)
   port = server.local_address.port
   spawn serve_forever(server, sc.handler)
