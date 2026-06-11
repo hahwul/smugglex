@@ -134,9 +134,27 @@ pub struct Cli {
     pub fuzz_seed: u64,
 
     /// Exploit types to run after detection (comma-separated:
-    /// localhost-access,path-fuzz,smuggle,capture)
+    /// localhost-access,path-fuzz,smuggle,capture,reveal)
     #[arg(help_heading = "EXPLOIT", short = 'e', long = "exploit")]
     pub exploit: Option<String>,
+
+    /// Reflecting endpoint for the `reveal` exploit (a page that echoes a form
+    /// field, e.g. a search box). Defaults to the scanned path.
+    #[arg(
+        help_heading = "EXPLOIT",
+        long = "reveal-endpoint",
+        value_name = "PATH"
+    )]
+    pub reveal_endpoint: Option<String>,
+
+    /// Form parameter the `reveal` endpoint reflects back in its response
+    #[arg(
+        help_heading = "EXPLOIT",
+        long = "reveal-param",
+        value_name = "NAME",
+        default_value = "q"
+    )]
+    pub reveal_param: String,
 
     /// Inner request for the `smuggle`/`capture` exploits (raw request line +
     /// headers; use \r\n for line breaks). For `smuggle` it defaults to a request

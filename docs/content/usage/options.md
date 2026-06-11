@@ -55,10 +55,13 @@ Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-e, --exploit` | | Exploit types (comma-separated) |
-| `--exploit-ports` | 22,80,443,8080,3306 | Ports to test |
+| `--exploit-ports` | 22,80,443,8080,3306 | Ports to test (localhost-access) |
 | `--exploit-wordlist` | | Wordlist for path-fuzz |
+| `--smuggle-request` | | Inner request for smuggle/capture |
+| `--reveal-endpoint` | scanned path | Reflecting endpoint for reveal |
+| `--reveal-param` | q | Reflected form parameter for reveal |
 
-Available exploits: `localhost-access`, `path-fuzz`
+Available exploits: `localhost-access`, `path-fuzz`, `smuggle`, `capture`, `reveal`
 
 ## Examples
 
