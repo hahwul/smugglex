@@ -42,6 +42,8 @@ struct ExploitParams<'a> {
     wordlist_path: Option<&'a str>,
     delay: u64,
     smuggle_request: Option<&'a str>,
+    reveal_endpoint: Option<&'a str>,
+    reveal_param: &'a str,
 }
 
 /// Outcome of scanning a single target. Used to collect results for batch JSON output
@@ -636,12 +638,12 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     // In machine/JSON mode we still allow payload export via the check phase, but skip exploit execution
     // to keep stdout clean and because exploit details are better consumed interactively.
     if let Some(ref exploit_str) = cli.exploit {
-        // The `smuggle`/`capture` exploits fire their payload directly and do not
-        // depend on a prior detection, so allow them to run even when the scan
-        // was quiet.
+        // The `smuggle`/`capture`/`reveal` exploits fire their payload directly
+        // and do not depend on a prior detection, so allow them to run even when
+        // the scan was quiet.
         let direct_exploit = exploit_str
             .split(',')
-            .any(|x| matches!(x.trim(), "smuggle" | "capture"));
+            .any(|x| matches!(x.trim(), "smuggle" | "capture" | "reveal"));
         if (found_vulnerability || direct_exploit) && !is_machine() {
             let exploit_params = ExploitParams {
                 exploit_str,
@@ -657,6 +659,8 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                 wordlist_path: cli.exploit_wordlist.as_deref(),
                 delay: cli.delay,
                 smuggle_request: cli.smuggle_request.as_deref(),
+                reveal_endpoint: cli.reveal_endpoint.as_deref(),
+                reveal_param: &cli.reveal_param,
             };
             if let Err(e) = run_exploits(&exploit_params).await {
                 log(LogLevel::Error, &format!("exploit phase failed: {}", e));
@@ -930,6 +934,34 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                         &smuggled,
                     ),
                     Err(e) => log(LogLevel::Error, &format!("capture exploit failed: {}", e)),
+                }
+            }
+            "reveal" => {
+                log(LogLevel::Info, "running reveal exploit");
+
+                // Like smuggle/capture, this fires its own wrapper directly and
+                // needs no prior detection. It smuggles a POST to a reflecting
+                // endpoint with an oversized Content-Length so the next request —
+                // as rewritten by the front-end — is echoed back, exposing any
+                // injected headers.
+                let reveal_params = smugglex::exploit::RevealParams {
+                    host: params.host,
+                    port: params.port,
+                    path: params.path,
+                    use_tls: params.use_tls,
+                    timeout: params.timeout,
+                    verbose: params.verbose,
+                    reflect_endpoint: params.reveal_endpoint.unwrap_or(params.path).to_string(),
+                    reflect_param: params.reveal_param.to_string(),
+                    follow_ups: 4,
+                };
+                match smugglex::exploit::test_reveal(&reveal_params).await {
+                    Ok(result) => smugglex::exploit::print_reveal_results(
+                        &result,
+                        params.target_url,
+                        &reveal_params,
+                    ),
+                    Err(e) => log(LogLevel::Error, &format!("reveal exploit failed: {}", e)),
                 }
             }
             _ => {

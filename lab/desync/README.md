@@ -89,6 +89,17 @@ The smuggle exploit prints `CL.TE [TE:plain]: [200, 405, 405, …]` and
 
 Expected (patched `:8081`): **no** checks vulnerable, no smuggle delivered.
 
+### Other exploits against this lab
+
+`--exploit capture` and `--exploit reveal` also drive the same desync, but this
+minimal backend only echoes the *first line* of the request it received
+(`BACKEND ok: <line>`); it does not reflect request bodies or headers. So
+`capture` can surface a diverging queued response, while `reveal` — which needs
+an endpoint that reflects a submitted form parameter back in its response — has
+nothing to echo here and will report that its marker was not reflected. Point
+`reveal` at a real reflecting endpoint (a search box) to see front-end-injected
+headers recovered.
+
 ## Config (env)
 
 | var | default | meaning |

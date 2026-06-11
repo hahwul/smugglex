@@ -496,6 +496,32 @@ fn test_exploit_path_fuzz() {
 }
 
 #[test]
+fn test_exploit_reveal_defaults() {
+    let cli = Cli::parse_from(["smugglex", "http://example.com", "--exploit", "reveal"]);
+    assert_eq!(cli.exploit, Some("reveal".to_string()));
+    // Endpoint defaults to None (falls back to the scanned path at run time);
+    // the reflected parameter defaults to `q`.
+    assert_eq!(cli.reveal_endpoint, None);
+    assert_eq!(cli.reveal_param, "q");
+}
+
+#[test]
+fn test_exploit_reveal_custom_endpoint_and_param() {
+    let cli = Cli::parse_from([
+        "smugglex",
+        "http://example.com",
+        "--exploit",
+        "reveal",
+        "--reveal-endpoint",
+        "/search",
+        "--reveal-param",
+        "comment",
+    ]);
+    assert_eq!(cli.reveal_endpoint, Some("/search".to_string()));
+    assert_eq!(cli.reveal_param, "comment");
+}
+
+#[test]
 fn test_exploit_multiple_types() {
     let cli = Cli::parse_from([
         "smugglex",
