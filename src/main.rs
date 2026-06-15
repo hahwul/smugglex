@@ -13,6 +13,7 @@ use smugglex::exploit::{
     test_path_fuzz,
 };
 use smugglex::fingerprint::{fingerprint_target, suggest_checks};
+use smugglex::http;
 use smugglex::model::{CheckResult, FingerprintInfo, ScanResults};
 use smugglex::mutator::{Mutator, MutatorConfig};
 use smugglex::output::{
@@ -86,6 +87,16 @@ impl ScanOutcome {
 async fn main() -> Result<()> {
     let mut cli = Cli::parse();
     cli.apply_global_settings();
+
+    // Initialize TLS config (must happen before any network requests).
+    http::init_tls_config(
+        cli.insecure,
+        cli.cacert.as_deref().map(std::path::Path::new),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("{} TLS init error: {}", "[!]".yellow().bold(), e);
+        std::process::exit(2);
+    });
 
     // Activate machine mode for clean structured output (used by AI agents, scripts, CI).
     // When active, stdout will contain *only* JSON; all chatter goes to stderr or is suppressed.

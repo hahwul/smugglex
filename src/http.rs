@@ -1,6 +1,7 @@
 use colored::*;
 use rustls::pki_types::ServerName;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -9,17 +10,228 @@ use url::Url;
 
 use crate::error::{Result, SmugglexError};
 
-// Lazy static TLS configuration to avoid recreating for each request
-static TLS_CONFIG: LazyLock<Arc<rustls::ClientConfig>> = LazyLock::new(|| {
+// Initializable TLS configuration
+static TLS_CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+
+/// A certificate verifier that accepts any certificate (for --insecure mode).
+#[derive(Debug)]
+struct PermitAnyCert;
+
+impl rustls::client::danger::ServerCertVerifier for PermitAnyCert {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        use rustls::SignatureScheme;
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::ED25519,
+        ]
+    }
+}
+
+/// Build the default TLS config with webpki roots.
+fn build_default_tls_config() -> Arc<rustls::ClientConfig> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
     Arc::new(
         rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth(),
     )
-});
+}
+
+/// Build an insecure TLS config that skips all certificate verification.
+fn build_insecure_tls_config() -> Arc<rustls::ClientConfig> {
+    Arc::new(
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PermitAnyCert))
+            .with_no_client_auth(),
+    )
+}
+
+/// Build a TLS config with webpki roots plus a custom CA cert file.
+fn build_custom_ca_tls_config(ca_path: &Path) -> Result<Arc<rustls::ClientConfig>> {
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let pem_data = std::fs::read(ca_path).map_err(|e| {
+        SmugglexError::Io(format!(
+            "failed to read CA cert file '{}': {}",
+            ca_path.display(),
+            e
+        ))
+    })?;
+    let mut reader = std::io::BufReader::new(pem_data.as_slice());
+    let certs: Vec<rustls::pki_types::CertificateDer<'_>> = rustls_pemfile::certs(&mut reader)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| SmugglexError::Tls(format!("failed to parse CA cert: {}", e)))?;
+
+    if certs.is_empty() {
+        return Err(SmugglexError::Tls(format!(
+            "no certificates found in CA file '{}'",
+            ca_path.display()
+        )));
+    }
+
+    for cert in certs {
+        root_store
+            .add(cert)
+            .map_err(|e| SmugglexError::Tls(format!("failed to add CA cert: {}", e)))?;
+    }
+
+    Ok(Arc::new(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth(),
+    ))
+}
+
+/// Initialize the global TLS configuration. Must be called once before any
+/// network requests. `insecure` disables certificate verification; `ca_cert`
+/// adds a custom CA certificate file (PEM) alongside webpki roots.
+pub fn init_tls_config(insecure: bool, ca_cert: Option<&Path>) -> Result<()> {
+    let config = if insecure {
+        build_insecure_tls_config()
+    } else if let Some(ca_path) = ca_cert {
+        build_custom_ca_tls_config(ca_path)?
+    } else {
+        build_default_tls_config()
+    };
+
+    TLS_CONFIG
+        .set(config)
+        .map_err(|_| SmugglexError::Tls("TLS config already initialized".to_string()))?;
+
+    // Save settings so HTTP/2 can build its own config with the same policy.
+    let _ = TLS_SETTINGS.set(TlsInitSettings {
+        insecure,
+        ca_cert: ca_cert.map(|p| p.to_string_lossy().into_owned()),
+    });
+
+    Ok(())
+}
+
+/// Return a reference to the global TLS config (HTTP/1.1).
+pub fn get_tls_config() -> &'static Arc<rustls::ClientConfig> {
+    TLS_CONFIG
+        .get()
+        .expect("TLS config not initialized — call init_tls_config first")
+}
+
+/// Settings captured at init time, reused by HTTP/2 to build its own config
+/// with the same trust policy but different ALPN.
+struct TlsInitSettings {
+    insecure: bool,
+    ca_cert: Option<String>,
+}
+
+static TLS_SETTINGS: OnceLock<TlsInitSettings> = OnceLock::new();
+
+/// Build an HTTP/2 TLS config (ALPN h2) matching the global trust policy.
+pub fn build_h2_tls_config() -> Result<Arc<rustls::ClientConfig>> {
+    let settings = TLS_SETTINGS
+        .get()
+        .expect("TLS settings not initialized — call init_tls_config first");
+
+    let config = if settings.insecure {
+        build_insecure_h2_tls_config()
+    } else if let Some(ref ca_path) = settings.ca_cert {
+        build_custom_ca_h2_tls_config(Path::new(ca_path))?
+    } else {
+        build_default_h2_tls_config()
+    };
+    Ok(config)
+}
+
+fn build_default_h2_tls_config() -> Arc<rustls::ClientConfig> {
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Arc::new(cfg)
+}
+
+fn build_insecure_h2_tls_config() -> Arc<rustls::ClientConfig> {
+    let mut cfg = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PermitAnyCert))
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Arc::new(cfg)
+}
+
+fn build_custom_ca_h2_tls_config(ca_path: &Path) -> Result<Arc<rustls::ClientConfig>> {
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let pem_data = std::fs::read(ca_path).map_err(|e| {
+        SmugglexError::Io(format!(
+            "failed to read CA cert file '{}': {}",
+            ca_path.display(),
+            e
+        ))
+    })?;
+    let mut reader = std::io::BufReader::new(pem_data.as_slice());
+    let certs: Vec<rustls::pki_types::CertificateDer<'_>> = rustls_pemfile::certs(&mut reader)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| SmugglexError::Tls(format!("failed to parse CA cert: {}", e)))?;
+
+    if certs.is_empty() {
+        return Err(SmugglexError::Tls(format!(
+            "no certificates found in CA file '{}'",
+            ca_path.display()
+        )));
+    }
+
+    for cert in certs {
+        root_store
+            .add(cert)
+            .map_err(|e| SmugglexError::Tls(format!("failed to add CA cert: {}", e)))?;
+    }
+
+    let mut cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Ok(Arc::new(cfg))
+}
 
 static PROXY: OnceLock<String> = OnceLock::new();
 
@@ -58,7 +270,7 @@ async fn get_stream_direct(
 ) -> Result<Box<dyn ReadWrite + Unpin + Send>> {
     let addr = format!("{}:{}", host, port);
     if use_tls {
-        let connector = TlsConnector::from(Arc::clone(&TLS_CONFIG));
+        let connector = TlsConnector::from(Arc::clone(get_tls_config()));
         let stream = TcpStream::connect(&addr).await?;
         let domain = ServerName::try_from(host.to_string())?;
         let tls_stream = connector.connect(domain, stream).await?;
@@ -118,7 +330,7 @@ async fn get_stream_via_proxy(
 
     // Now we have a tunnel; do TLS handshake if needed
     if use_tls {
-        let connector = TlsConnector::from(Arc::clone(&TLS_CONFIG));
+        let connector = TlsConnector::from(Arc::clone(get_tls_config()));
         let domain = ServerName::try_from(host.to_string())?;
         let tls_stream = connector.connect(domain, stream).await?;
         Ok(Box::new(tls_stream))
