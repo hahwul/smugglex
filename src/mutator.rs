@@ -143,10 +143,13 @@ impl Mutator {
             {
                 let mutation_type = self.rand_index(4);
                 let new_val = match mutation_type {
-                    0 => format!("0{}", val),    // leading zero
-                    1 => format!("{}", val + 1), // off-by-one up
-                    2 => format!("{} ", val),    // trailing space
-                    3 => format!(" {}", val),    // leading space
+                    0 => format!("0{}", val), // leading zero
+                    // Saturating so a seed declaring `Content-Length: i64::MAX`
+                    // cannot overflow (a debug panic / release wrap to a negative
+                    // length); it simply stays at i64::MAX.
+                    1 => format!("{}", val.saturating_add(1)), // off-by-one up
+                    2 => format!("{} ", val),                  // trailing space
+                    3 => format!(" {}", val),                  // leading space
                     _ => format!("{}", val),
                 };
                 let value_start = after_header + skip_ws;
@@ -318,6 +321,29 @@ fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mutate_cl_value_does_not_overflow_on_i64_max() {
+        // A seed declaring `Content-Length: i64::MAX` must not panic (debug
+        // overflow-checks) or wrap to a negative length when the off-by-one
+        // mutation fires. Drive mutate_cl_value across many PRNG states so the
+        // `val + 1` branch is exercised; previously this panicked on i64::MAX.
+        let seed = format!(
+            "POST / HTTP/1.1\r\nHost: h\r\nContent-Length: {}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+            i64::MAX
+        );
+        let mut m = Mutator::new(MutatorConfig {
+            seed: 1,
+            mutations_per_payload: 1,
+        });
+        for _ in 0..64 {
+            let mutated = m.mutate_cl_value(&seed);
+            assert!(
+                !mutated.contains("Content-Length: -"),
+                "off-by-one mutation must not produce a negative Content-Length"
+            );
+        }
+    }
 
     #[test]
     fn test_deterministic_output() {

@@ -167,6 +167,15 @@ fn parse_origin_form(
         )
     })?;
     let (host, port) = split_host_port(&host_header)?;
+    // A present-but-empty Host (`Host:` or `Host:   `) leaves no connection
+    // target; rejecting it here fails fast with a clear message instead of a
+    // confusing downstream "URL parse error: empty host" against the synthetic
+    // connect URL.
+    if host.is_empty() {
+        return Err(SmugglexError::InvalidInput(
+            "raw request Host header is empty (required to determine the target)".to_string(),
+        ));
+    }
     Ok(RawRequest {
         method,
         target,
@@ -268,7 +277,14 @@ fn is_tchar(b: u8) -> bool {
 fn split_host_port(host_value: &str) -> Result<(String, Option<u16>)> {
     match host_value.rsplit_once(':') {
         Some((host, port))
-            if !host.is_empty() && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) =>
+            if !host.is_empty()
+                && !port.is_empty()
+                && port.chars().all(|c| c.is_ascii_digit())
+                // Only split off a port when the host part is unambiguous: a
+                // bracketed IPv6 literal (`[::1]`) or a host with no embedded
+                // colon. An unbracketed IPv6 literal like `::1` would otherwise
+                // be mis-split into host ":" + port "1"; return it whole instead.
+                && (host.ends_with(']') || !host.contains(':')) =>
         {
             let parsed = port.parse::<u16>().map_err(|_| {
                 SmugglexError::InvalidInput(format!(
@@ -493,6 +509,38 @@ mod tests {
         let raw = "GET / HTTP/1.1\r\nAccept: */*\r\n\r\n";
         let err = parse_raw_request(raw).unwrap_err();
         assert!(matches!(err, SmugglexError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn errors_on_empty_host_header() {
+        // A present-but-empty (or whitespace-only) Host value must be rejected,
+        // not silently accepted as an empty connection host.
+        for raw in [
+            "GET / HTTP/1.1\r\nHost:\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost:    \r\n\r\n",
+        ] {
+            let err = parse_raw_request(raw).unwrap_err();
+            assert!(
+                matches!(err, SmugglexError::InvalidInput(_)),
+                "empty Host should be InvalidInput, raw = {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_host_port_does_not_split_unbracketed_ipv6() {
+        // `::1` is a malformed (unbracketed) IPv6 Host; it must NOT be mis-split
+        // into host ":" + port 1. Return the whole value with no port instead.
+        assert_eq!(split_host_port("::1").unwrap(), ("::1".to_string(), None));
+        assert_eq!(
+            split_host_port("fe80::1").unwrap(),
+            ("fe80::1".to_string(), None)
+        );
+        // Bracketed IPv6 with an explicit port still splits correctly.
+        assert_eq!(
+            split_host_port("[::1]:8080").unwrap(),
+            ("[::1]".to_string(), Some(8080))
+        );
     }
 
     #[test]

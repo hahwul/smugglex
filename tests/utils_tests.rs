@@ -215,3 +215,19 @@ fn test_parse_status_code_empty() {
 fn test_parse_status_code_partial() {
     assert_eq!(parse_status_code("HTTP/1.1"), None);
 }
+
+#[test]
+fn test_parse_status_code_overflow_returns_none() {
+    // A status number that overflows u16 (from a malicious/garbled server) must
+    // be rejected, not silently truncated, so it cannot feed a bogus code into
+    // detection comparisons.
+    assert_eq!(parse_status_code("HTTP/1.1 99999 Custom"), None);
+    assert_eq!(parse_status_code("HTTP/1.1 4294967296 X"), None);
+}
+
+#[test]
+fn test_parse_status_code_non_numeric_token_returns_none() {
+    // Valid protocol but a non-numeric status token → None.
+    assert_eq!(parse_status_code("HTTP/1.1 OK"), None);
+    assert_eq!(parse_status_code("HTTP/2 abc"), None);
+}

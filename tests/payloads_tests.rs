@@ -1117,6 +1117,36 @@ fn test_h2_content_length_conflicts() {
 }
 
 #[test]
+fn test_h2_dual_content_length_matches_smuggled_body_len() {
+    // The dual-Content-Length payload must declare a length equal to the
+    // smuggled request's byte length for ANY host. Previously it was hardcoded
+    // to 44, which only matched a 10-char host and mis-framed every other case.
+    for host in ["a.b", "test.com", "very-long-host.example.com"] {
+        let payloads = get_h2_payloads("/", host, "POST", &[], &[]);
+        let dual = payloads
+            .iter()
+            .find(|p| {
+                p.matches("Content-Length:").count() >= 2 && p.contains("GET /smuggled HTTP/1.1")
+            })
+            .expect("dual-Content-Length smuggling payload should exist");
+        let (head, body) = dual
+            .split_once("\r\n\r\n")
+            .expect("payload must have a header/body separator");
+        let declared: usize = head
+            .lines()
+            .filter_map(|l| l.strip_prefix("Content-Length: "))
+            .filter_map(|v| v.parse::<usize>().ok())
+            .find(|&n| n > 0)
+            .expect("a non-zero Content-Length should be declared");
+        assert_eq!(
+            declared,
+            body.len(),
+            "declared Content-Length must equal smuggled body length for host {host}"
+        );
+    }
+}
+
+#[test]
 fn test_h2_header_value_newline_injection() {
     let payloads = get_h2_payloads("/", "test.com", "GET", &[], &[]);
 

@@ -143,6 +143,14 @@ impl H2Request<'_> {
 
 fn put_frame(out: &mut Vec<u8>, ftype: u8, flags: u8, stream: u32, payload: &[u8]) {
     let len = payload.len();
+    // The frame length field is 24 bits. All payloads smugglex emits are tiny
+    // (a small HPACK header block or a few-byte DATA body), so exceeding this
+    // would be a bug — guard it rather than silently truncating into a corrupt
+    // frame that desyncs the whole outbound stream.
+    debug_assert!(
+        len <= 0xFF_FFFF,
+        "HTTP/2 frame payload ({len} bytes) exceeds the 24-bit length field"
+    );
     out.push((len >> 16) as u8);
     out.push((len >> 8) as u8);
     out.push(len as u8);
@@ -247,6 +255,82 @@ async fn h2_probe(
     }
 }
 
+/// A single declared frame larger than this is treated as a hostile/garbled
+/// peer and rejected, instead of letting the accumulation buffer grow toward
+/// the 16 MiB the 24-bit length field allows. A real response HEADERS frame is
+/// tiny; 1 MiB is a generous ceiling.
+const MAX_FRAME_BYTES: usize = 1 << 20;
+
+/// Outcome of scanning the accumulation buffer for a decisive frame.
+enum FrameScan {
+    /// A terminal frame (response HEADERS / RST / GOAWAY, or an oversized frame)
+    /// decided the outcome. `send_settings_ack` is true if a non-ACK server
+    /// SETTINGS frame was seen first and still needs acknowledging.
+    Outcome {
+        outcome: H2Outcome,
+        send_settings_ack: bool,
+    },
+    /// No terminal frame yet; `consumed` leading bytes were fully parsed and can
+    /// be drained. `send_settings_ack` flags an owed SETTINGS ACK.
+    NeedMore {
+        consumed: usize,
+        send_settings_ack: bool,
+    },
+}
+
+/// Pure frame-boundary scan over the accumulation buffer. Reads the 24-bit
+/// length, type, flags and stream id of each fully-buffered frame and decides
+/// the probe outcome. Bounds are fully checked (`acc.len() >= i + 9` before
+/// reading a header, `acc.len() >= i + 9 + flen` before slicing the payload),
+/// so a hostile length field can never index out of bounds; an oversized
+/// declared length is rejected via [`MAX_FRAME_BYTES`].
+fn scan_frames(acc: &[u8]) -> FrameScan {
+    let terminal = |responded: bool, status: Option<u16>, reset: bool| H2Outcome {
+        responded,
+        status,
+        reset,
+        duration: Duration::ZERO,
+    };
+    let mut i = 0;
+    let mut send_settings_ack = false;
+    while acc.len() >= i + 9 {
+        let flen = ((acc[i] as usize) << 16) | ((acc[i + 1] as usize) << 8) | acc[i + 2] as usize;
+        let ftype = acc[i + 3];
+        let flags = acc[i + 4];
+        let stream_id = u32::from_be_bytes([acc[i + 5] & 0x7f, acc[i + 6], acc[i + 7], acc[i + 8]]);
+        if flen > MAX_FRAME_BYTES {
+            return FrameScan::Outcome {
+                outcome: terminal(false, None, true),
+                send_settings_ack,
+            };
+        }
+        if acc.len() < i + 9 + flen {
+            break; // frame body not fully received yet
+        }
+        let payload = &acc[i + 9..i + 9 + flen];
+
+        if ftype == FRAME_SETTINGS && flags & FLAG_ACK == 0 {
+            send_settings_ack = true;
+        } else if ftype == FRAME_HEADERS && stream_id == 1 {
+            let status = payload.first().copied().and_then(status_from_indexed);
+            return FrameScan::Outcome {
+                outcome: terminal(true, status, false),
+                send_settings_ack,
+            };
+        } else if (ftype == FRAME_RST_STREAM && stream_id == 1) || ftype == FRAME_GOAWAY {
+            return FrameScan::Outcome {
+                outcome: terminal(false, None, true),
+                send_settings_ack,
+            };
+        }
+        i += 9 + flen;
+    }
+    FrameScan::NeedMore {
+        consumed: i,
+        send_settings_ack,
+    }
+}
+
 /// Read frames until a response HEADERS for our stream arrives, or the peer
 /// resets/closes. ACKs the server SETTINGS so the connection stays live.
 async fn read_response<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) -> Result<H2Outcome> {
@@ -264,42 +348,30 @@ async fn read_response<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) -> Res
         }
         acc.extend_from_slice(&buf[..n]);
 
-        let mut i = 0;
-        while acc.len() >= i + 9 {
-            let flen =
-                ((acc[i] as usize) << 16) | ((acc[i + 1] as usize) << 8) | acc[i + 2] as usize;
-            let ftype = acc[i + 3];
-            let flags = acc[i + 4];
-            let stream_id =
-                u32::from_be_bytes([acc[i + 5] & 0x7f, acc[i + 6], acc[i + 7], acc[i + 8]]);
-            if acc.len() < i + 9 + flen {
-                break; // frame body not fully received yet
+        match scan_frames(&acc) {
+            FrameScan::Outcome {
+                outcome,
+                send_settings_ack,
+            } => {
+                if send_settings_ack {
+                    let mut ack = Vec::new();
+                    put_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[]);
+                    stream.write_all(&ack).await?;
+                }
+                return Ok(outcome);
             }
-            let payload = &acc[i + 9..i + 9 + flen];
-
-            if ftype == FRAME_SETTINGS && flags & FLAG_ACK == 0 {
-                let mut ack = Vec::new();
-                put_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[]);
-                stream.write_all(&ack).await?;
-            } else if ftype == FRAME_HEADERS && stream_id == 1 {
-                let status = payload.first().copied().and_then(status_from_indexed);
-                return Ok(H2Outcome {
-                    responded: true,
-                    status,
-                    reset: false,
-                    duration: Duration::ZERO,
-                });
-            } else if (ftype == FRAME_RST_STREAM && stream_id == 1) || ftype == FRAME_GOAWAY {
-                return Ok(H2Outcome {
-                    responded: false,
-                    status: None,
-                    reset: true,
-                    duration: Duration::ZERO,
-                });
+            FrameScan::NeedMore {
+                consumed,
+                send_settings_ack,
+            } => {
+                if send_settings_ack {
+                    let mut ack = Vec::new();
+                    put_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[]);
+                    stream.write_all(&ack).await?;
+                }
+                acc.drain(0..consumed);
             }
-            i += 9 + flen;
         }
-        acc.drain(0..i);
     }
 }
 
@@ -596,5 +668,109 @@ mod tests {
             duration: Duration::from_millis(200),
         };
         assert!(!stalled(&ok, to));
+    }
+
+    #[test]
+    fn scan_frames_decodes_headers_status() {
+        let mut acc = Vec::new();
+        put_frame(&mut acc, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]); // :status 200
+        match scan_frames(&acc) {
+            FrameScan::Outcome { outcome, .. } => {
+                assert!(outcome.responded);
+                assert_eq!(outcome.status, Some(200));
+            }
+            _ => panic!("expected a terminal HEADERS outcome"),
+        }
+    }
+
+    #[test]
+    fn scan_frames_acks_settings_before_headers() {
+        let mut acc = Vec::new();
+        put_frame(&mut acc, FRAME_SETTINGS, 0, 0, &[]); // server SETTINGS (needs ACK)
+        put_frame(&mut acc, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]);
+        match scan_frames(&acc) {
+            FrameScan::Outcome {
+                outcome,
+                send_settings_ack,
+            } => {
+                assert!(outcome.responded);
+                assert!(send_settings_ack, "non-ACK SETTINGS must be acknowledged");
+            }
+            _ => panic!("expected a terminal outcome"),
+        }
+    }
+
+    #[test]
+    fn scan_frames_maps_rst_and_goaway_to_reset() {
+        let mut rst = Vec::new();
+        put_frame(&mut rst, FRAME_RST_STREAM, 0, 1, &[0, 0, 0, 0]);
+        match scan_frames(&rst) {
+            FrameScan::Outcome { outcome, .. } => assert!(outcome.reset && !outcome.responded),
+            _ => panic!("RST_STREAM(1) should be terminal"),
+        }
+        let mut goaway = Vec::new();
+        put_frame(&mut goaway, FRAME_GOAWAY, 0, 0, &[0, 0, 0, 0, 0, 0, 0, 0]);
+        match scan_frames(&goaway) {
+            FrameScan::Outcome { outcome, .. } => assert!(outcome.reset),
+            _ => panic!("GOAWAY should be terminal"),
+        }
+    }
+
+    #[test]
+    fn scan_frames_needs_more_on_partial_frame() {
+        // A 9-byte header declaring a 10-byte payload with no body yet.
+        let acc = vec![0, 0, 10, FRAME_HEADERS, FLAG_END_HEADERS, 0, 0, 0, 1];
+        match scan_frames(&acc) {
+            FrameScan::NeedMore { consumed, .. } => assert_eq!(consumed, 0),
+            _ => panic!("a partial frame should request more bytes"),
+        }
+    }
+
+    #[test]
+    fn scan_frames_rejects_oversized_frame_without_buffering() {
+        // 0xFFFFFF (16 MiB) exceeds MAX_FRAME_BYTES: reject fast, never slice.
+        let acc = vec![0xFF, 0xFF, 0xFF, FRAME_HEADERS, 0, 0, 0, 0, 1];
+        match scan_frames(&acc) {
+            FrameScan::Outcome { outcome, .. } => assert!(outcome.reset),
+            _ => panic!("an oversized declared frame must be rejected"),
+        }
+    }
+
+    #[test]
+    fn scan_frames_drains_settings_then_awaits_partial_headers() {
+        let mut acc = Vec::new();
+        put_frame(&mut acc, FRAME_SETTINGS, 0, 0, &[]); // 9 bytes, fully present
+        acc.extend_from_slice(&[0, 0, 10, FRAME_HEADERS, FLAG_END_HEADERS, 0, 0, 0, 1]); // partial
+        match scan_frames(&acc) {
+            FrameScan::NeedMore {
+                consumed,
+                send_settings_ack,
+            } => {
+                assert_eq!(consumed, 9, "the complete SETTINGS frame should be drained");
+                assert!(send_settings_ack);
+            }
+            _ => panic!("expected NeedMore after the complete SETTINGS frame"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_response_decodes_headers_over_duplex() {
+        let (mut server, mut client) = tokio::io::duplex(4096);
+        let mut frames = Vec::new();
+        put_frame(&mut frames, FRAME_SETTINGS, 0, 0, &[]);
+        put_frame(&mut frames, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]);
+        server.write_all(&frames).await.unwrap();
+        let outcome = read_response(&mut client).await.unwrap();
+        assert!(outcome.responded);
+        assert_eq!(outcome.status, Some(200));
+    }
+
+    #[tokio::test]
+    async fn read_response_reset_on_eof() {
+        let (server, mut client) = tokio::io::duplex(64);
+        drop(server); // closing the peer makes the next read return 0 (EOF)
+        let outcome = read_response(&mut client).await.unwrap();
+        assert!(!outcome.responded);
+        assert!(outcome.reset);
     }
 }

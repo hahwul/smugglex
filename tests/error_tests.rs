@@ -81,6 +81,38 @@ fn test_from_io_error() {
     }
 }
 
+/// A TimedOut io::Error must map to Timeout (with its actionable hint), not Io.
+#[test]
+fn test_from_io_error_timedout_maps_to_timeout() {
+    let io_err = io::Error::new(io::ErrorKind::TimedOut, "timed out");
+    let smugglex_err: SmugglexError = io_err.into();
+    assert!(
+        matches!(smugglex_err, SmugglexError::Timeout(_)),
+        "TimedOut io::Error should classify as Timeout"
+    );
+    assert!(smugglex_err.to_string().contains("try increasing timeout"));
+}
+
+/// tokio's Elapsed must convert to a Timeout variant.
+#[test]
+fn test_from_elapsed_maps_to_timeout() {
+    // Produce a real Elapsed by timing out an immediately-pending future.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let elapsed: tokio::time::error::Elapsed = rt.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(1),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err()
+    });
+    let smugglex_err: SmugglexError = elapsed.into();
+    assert!(matches!(smugglex_err, SmugglexError::Timeout(_)));
+}
+
 /// Test From<serde_json::Error> implementation
 #[test]
 fn test_from_serde_json_error() {

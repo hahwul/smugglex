@@ -114,6 +114,35 @@ async fn main() -> Result<()> {
         std::process::exit(2);
     }
 
+    // Validate `--checks` up front (target-independent): a typo must not
+    // silently scan nothing and report a clean target with exit 0.
+    if let Some(ref checks_str) = cli.checks {
+        let unknown =
+            smugglex::cli::unknown_check_names(checks_str, &smugglex::cli::KNOWN_CHECK_NAMES);
+        if !unknown.is_empty() && !is_machine() {
+            log(
+                LogLevel::Warning,
+                &format!(
+                    "ignoring unrecognized check name(s): {} (known: {})",
+                    unknown.join(", "),
+                    smugglex::cli::KNOWN_CHECK_NAMES.join(", "),
+                ),
+            );
+        }
+        if !smugglex::cli::has_any_known_check(checks_str, &smugglex::cli::KNOWN_CHECK_NAMES) {
+            emit_input_error(
+                &cli,
+                &format!(
+                    "no valid checks selected from --checks '{}'; nothing would be scanned (known checks: {})",
+                    checks_str,
+                    smugglex::cli::KNOWN_CHECK_NAMES.join(", "),
+                ),
+            );
+            // Usage/input error → exit 2
+            std::process::exit(2);
+        }
+    }
+
     // Collect outcomes from all targets. This enables:
     // - Clean single JSON document for batch scans (critical for AI / jq / scripts)
     // - Correct exit code (0 = clean, 1 = vulnerable found)
