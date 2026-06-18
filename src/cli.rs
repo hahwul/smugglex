@@ -252,6 +252,14 @@ pub struct Cli {
     /// Number of baseline requests for timing measurement
     #[arg(help_heading = "DETECT", long = "baseline-count", default_value_t = 3)]
     pub baseline_count: usize,
+
+    /// Skip TLS certificate verification (allow self-signed certificates)
+    #[arg(help_heading = "TLS", short = 'k', long = "insecure", action = clap::ArgAction::SetTrue)]
+    pub insecure: bool,
+
+    /// Custom CA certificate file (PEM format) for self-signed/internal certificates
+    #[arg(help_heading = "TLS", long = "cacert", value_name = "FILE")]
+    pub cacert: Option<String>,
 }
 
 impl Cli {

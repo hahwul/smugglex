@@ -15,7 +15,6 @@
 //! stalls until the timeout. A well-formed control request rules out a backend
 //! that is simply slow for this shape.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -187,13 +186,8 @@ fn status_from_indexed(byte: u8) -> Option<u16> {
 }
 
 async fn h2_connect(host: &str, port: u16) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let mut cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    cfg.alpn_protocols = vec![b"h2".to_vec()];
-    let connector = TlsConnector::from(Arc::new(cfg));
+    let cfg = crate::http::build_h2_tls_config()?;
+    let connector = TlsConnector::from(cfg);
     let tcp = TcpStream::connect((host, port)).await?;
     let dnsname = rustls::pki_types::ServerName::try_from(host.to_string())?;
     let tls = connector.connect(dnsname, tcp).await?;
