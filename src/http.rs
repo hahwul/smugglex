@@ -278,7 +278,13 @@ async fn read_one_http_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -
         if let Some(he) = header_end {
             match framing {
                 BodyFraming::ContentLength(len) => {
-                    if buf.len() >= he + len {
+                    // Checked addition so a hostile/garbled response advertising a
+                    // near-`usize::MAX` Content-Length cannot overflow `he + len`
+                    // (a debug-build panic, or a release-build wrap that would make
+                    // the comparison true and return a truncated response). An
+                    // unsatisfiable total simply means "keep reading until EOF",
+                    // which is the safe behavior. Mirrors `response_complete_len`.
+                    if he.checked_add(len).is_some_and(|total| buf.len() >= total) {
                         break;
                     }
                 }
@@ -322,9 +328,15 @@ pub async fn pipeline_requests(
     use_tls: bool,
 ) -> Result<Vec<String>> {
     let timeout_dur = Duration::from_secs(timeout);
-    let bytes = tokio::time::timeout(timeout_dur, async {
+    // `responses` is owned *outside* the timeout scope so that an elapsed
+    // timeout preserves whatever was collected so far — the documented
+    // contract, and what response-queue capture relies on: a smuggled
+    // request's response is delivered to a *later* request, and the exchange
+    // routinely stalls on a hanging follow-up precisely when an interesting
+    // response is already buffered. Dropping it would be a false negative.
+    let mut responses: Vec<Vec<u8>> = Vec::with_capacity(requests.len());
+    let outcome = tokio::time::timeout(timeout_dur, async {
         let mut stream = get_stream(host, port, use_tls).await?;
-        let mut responses: Vec<Vec<u8>> = Vec::with_capacity(requests.len());
         // Bytes already read that belong to a later response (the response-queue
         // offset that capture relies on) are carried between reads.
         let mut carry: Vec<u8> = Vec::new();
@@ -339,12 +351,24 @@ pub async fn pipeline_requests(
                 None => break, // peer closed with nothing left to read
             }
         }
-        Ok::<Vec<Vec<u8>>, crate::error::SmugglexError>(responses)
+        Ok::<(), crate::error::SmugglexError>(())
     })
-    .await
-    .unwrap_or_else(|_| Ok(Vec::new()))?;
+    .await;
 
-    Ok(bytes
+    match outcome {
+        // Completed within the timeout, or timed out: either way return what we
+        // collected. A mid-exchange connection error only surfaces when nothing
+        // was captured — once we hold at least one response it is more useful
+        // (and matches the timeout contract) to return it than to discard it.
+        Ok(Ok(())) | Err(_) => {}
+        Ok(Err(e)) => {
+            if responses.is_empty() {
+                return Err(e);
+            }
+        }
+    }
+
+    Ok(responses
         .into_iter()
         .map(|b| match String::from_utf8(b) {
             Ok(s) => s,
@@ -476,5 +500,70 @@ mod tests {
         // overflow/panic; it just reads as incomplete.
         let huge = format!("{:x}\r\nAB", usize::MAX);
         assert!(!chunked_body_complete(huge.as_bytes()));
+    }
+
+    #[test]
+    fn response_complete_len_content_length() {
+        let buf = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nAB";
+        assert_eq!(response_complete_len(buf), Some(buf.len()));
+        // One byte short of the declared body -> not yet complete.
+        let short = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nA";
+        assert_eq!(response_complete_len(short), None);
+    }
+
+    #[test]
+    fn response_complete_len_chunked_with_trailers() {
+        let buf = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nX-T: 1\r\n\r\n";
+        assert_eq!(response_complete_len(buf), Some(buf.len()));
+    }
+
+    #[test]
+    fn response_complete_len_oversized_content_length_does_not_panic() {
+        // A hostile/garbled `Content-Length: <usize::MAX>` must not overflow the
+        // `header_end + n` computation; the response simply reads as incomplete.
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\nAB",
+            usize::MAX
+        );
+        assert_eq!(response_complete_len(raw.as_bytes()), None);
+    }
+
+    #[tokio::test]
+    async fn read_one_http_response_oversized_content_length_does_not_panic() {
+        // Regression for the unchecked `he + len` overflow: under debug
+        // overflow-checks this previously panicked; it must instead read to EOF
+        // and return what arrived.
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\nAB",
+            usize::MAX
+        );
+        let data = raw.into_bytes();
+        let mut slice: &[u8] = &data;
+        let out = read_one_http_response(&mut slice).await.unwrap();
+        assert!(out.starts_with(b"HTTP/1.1 200 OK"));
+    }
+
+    #[tokio::test]
+    async fn read_one_framed_splits_two_glued_responses_and_carries_surplus() {
+        // Two complete Content-Length responses arrive glued in one buffer. The
+        // first call must return response A and carry B for the next read; the
+        // second call returns B from the carry; the third hits EOF.
+        let a = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nAB";
+        let b = b"HTTP/1.1 404 NF\r\nContent-Length: 2\r\n\r\nCD";
+        let mut data = Vec::new();
+        data.extend_from_slice(a);
+        data.extend_from_slice(b);
+        let mut slice: &[u8] = &data;
+        let mut carry: Vec<u8> = Vec::new();
+
+        let first = read_one_framed(&mut slice, &mut carry).await.unwrap();
+        assert_eq!(first.as_deref(), Some(&a[..]));
+        assert_eq!(carry, b.to_vec(), "surplus bytes for B must be carried");
+
+        let second = read_one_framed(&mut slice, &mut carry).await.unwrap();
+        assert_eq!(second.as_deref(), Some(&b[..]));
+
+        let third = read_one_framed(&mut slice, &mut carry).await.unwrap();
+        assert_eq!(third, None, "EOF with empty carry yields None");
     }
 }

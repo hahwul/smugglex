@@ -268,19 +268,41 @@ async fn measure_baseline(
     }
 
     let results = futures::future::join_all(futures).await;
+    aggregate_baseline(results)
+}
 
-    let mut durations = Vec::with_capacity(count);
-    let mut observed_status_codes = Vec::with_capacity(count);
+/// Aggregate the concurrent baseline probe results into a [`BaselineMeasurement`].
+///
+/// Failed probes (connection reset, timeout, EOF on a flaky network) are
+/// dropped rather than aborting the whole measurement — discarding the
+/// surviving samples over a single transient failure would turn an otherwise
+/// viable check into a false negative. Only when *every* probe failed is an
+/// error returned, since there is then nothing to measure against. This mirrors
+/// the best-effort behavior of `method_matched_baseline_durations`.
+fn aggregate_baseline(results: Vec<Result<(String, Duration)>>) -> Result<BaselineMeasurement> {
+    let mut durations = Vec::with_capacity(results.len());
+    let mut observed_status_codes = Vec::with_capacity(results.len());
     let mut last_status = String::new();
     let mut last_body_length = 0usize;
+    let mut last_error: Option<SmugglexError> = None;
 
     for result in results {
-        let (response, duration) = result?;
-        let status_line = response.lines().next().unwrap_or("");
-        observed_status_codes.push(parse_status_code(status_line));
-        durations.push(duration);
-        last_status = status_line.to_string();
-        last_body_length = response_body_length(&response);
+        match result {
+            Ok((response, duration)) => {
+                let status_line = response.lines().next().unwrap_or("");
+                observed_status_codes.push(parse_status_code(status_line));
+                durations.push(duration);
+                last_status = status_line.to_string();
+                last_body_length = response_body_length(&response);
+            }
+            Err(e) => last_error = Some(e),
+        }
+    }
+
+    if durations.is_empty() {
+        return Err(last_error.unwrap_or_else(|| {
+            SmugglexError::Io("baseline measurement produced no samples".into())
+        }));
     }
 
     let max_duration = durations.iter().copied().max().unwrap_or_default();
@@ -557,6 +579,24 @@ impl FollowupObservation {
     fn has_divergence(&self) -> bool {
         self.diverging > 0
     }
+
+    /// Whether the follow-up divergence is corroborated strongly enough to
+    /// override a control-based false-positive verdict. A single flaky probe —
+    /// one transient timeout or a lone status change — must NOT be enough, or a
+    /// uniformly slow backend (exactly the population the control check exists
+    /// to reject) gets promoted to a confirmed finding on one fluke. So the
+    /// main path requires a *majority* of the probes to diverge. The
+    /// unconditional second-request path already proves reproduction across two
+    /// independent plant+probe sequences, so a single divergence counts there
+    /// (it does not currently flow through the control FP check, but the guard
+    /// keeps the contract correct if it ever does).
+    fn has_corroborated_divergence(&self) -> bool {
+        if self.second_request {
+            self.diverging > 0
+        } else {
+            self.diverging * 2 > self.total
+        }
+    }
 }
 
 /// Send `FOLLOWUP_PROBE_COUNT` fresh-connection GET probes against the target
@@ -593,7 +633,10 @@ async fn observe_followup_divergence(
                 let status_line = response.lines().next().unwrap_or("");
                 let status_code = parse_status_code(status_line);
                 let body_len = response_body_length(&response);
-                let status_diverged = status_code != baseline.status_code;
+                // Use the structural status check (excludes flake-prone 5xx) so a
+                // transient gateway error does not count as desync divergence,
+                // matching `count_structural_followup_divergence`.
+                let status_diverged = followup_status_diverged(status_code, baseline.status_code);
                 let body_diverged = bodies_diverge(body_len, baseline.body_length);
                 if status_diverged || body_diverged {
                     diverging += 1;
@@ -748,11 +791,14 @@ fn control_indicates_false_positive(
     control: &ControlObservation,
     followup: Option<&FollowupObservation>,
 ) -> bool {
-    // ESCAPE: post-attack follow-up GET diverged from baseline → backend state
+    // ESCAPE: post-attack follow-up GETs diverged from baseline → backend state
     // was perturbed by the attack and persisted into a subsequent request.
     // This is the canonical "second-request" smuggling signature and overrides
-    // any timing/status FP rule.
-    if followup.is_some_and(|f| f.has_divergence()) {
+    // any timing/status FP rule — but only when *corroborated* (a majority of
+    // probes diverged). A single flaky follow-up (one transient timeout or a
+    // lone 5xx) must not override the control rejection, otherwise a uniformly
+    // slow backend is promoted to a finding on one fluke.
+    if followup.is_some_and(|f| f.has_corroborated_divergence()) {
         return false;
     }
 
@@ -1837,5 +1883,95 @@ mod tests {
         };
         // Both 504 would normally be FP, but body divergence overrides.
         assert!(!control_indicates_false_positive(&attack, &control, None));
+    }
+
+    #[test]
+    fn followup_single_flake_does_not_override_control_fp() {
+        // A uniformly-slow backend (control timing ~= attack) where exactly ONE
+        // of the 3 follow-up probes flaked. The control-FP rule must still fire:
+        // a single flaky follow-up is not corroboration.
+        let attack = VulnerabilityInfo {
+            status: "HTTP/1.1 200".into(),
+            status_code: Some(200),
+            duration: Duration::from_millis(2000),
+            body_length: 13,
+            header_fingerprint: ResponseHeaderFingerprint::default(),
+            is_connection_timeout: false,
+        };
+        let control = ControlObservation {
+            duration: Duration::from_millis(1900), // very similar timing
+            status_code: Some(200),
+            body_length: 13,
+            header_fingerprint: ResponseHeaderFingerprint::default(),
+            is_connection_timeout: false,
+        };
+        let single_flake = FollowupObservation {
+            diverging: 1,
+            total: 3,
+            second_request: false,
+        };
+        assert!(
+            control_indicates_false_positive(&attack, &control, Some(&single_flake)),
+            "one flaky follow-up must not override the control rejection"
+        );
+    }
+
+    #[test]
+    fn has_corroborated_divergence_requires_majority_on_main_path() {
+        let one = FollowupObservation {
+            diverging: 1,
+            total: 3,
+            second_request: false,
+        };
+        let two = FollowupObservation {
+            diverging: 2,
+            total: 3,
+            second_request: false,
+        };
+        assert!(!one.has_corroborated_divergence(), "1/3 is not a majority");
+        assert!(two.has_corroborated_divergence(), "2/3 is a majority");
+        // The second-request path already reproduced across sequences, so a
+        // single divergence there is corroboration enough.
+        let second_req = FollowupObservation {
+            diverging: 1,
+            total: 3,
+            second_request: true,
+        };
+        assert!(second_req.has_corroborated_divergence());
+    }
+
+    #[test]
+    fn aggregate_baseline_tolerates_partial_probe_failure() {
+        // A single failed probe among successes must not discard the baseline.
+        let results: Vec<Result<(String, Duration)>> = vec![
+            Ok((
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string(),
+                Duration::from_millis(100),
+            )),
+            Err(SmugglexError::Io("connection reset".into())),
+            Ok((
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string(),
+                Duration::from_millis(120),
+            )),
+        ];
+        let baseline = aggregate_baseline(results).expect("survivors should yield a baseline");
+        assert_eq!(
+            baseline.observed_status_codes.len(),
+            2,
+            "only the successful probes contribute status codes"
+        );
+        assert_eq!(baseline.status_code, Some(200));
+    }
+
+    #[test]
+    fn aggregate_baseline_errors_only_when_all_probes_fail() {
+        let results: Vec<Result<(String, Duration)>> = vec![
+            Err(SmugglexError::Io("reset".into())),
+            Err(SmugglexError::Timeout("timed out".into())),
+        ];
+        assert!(
+            aggregate_baseline(results).is_err(),
+            "no surviving samples → error"
+        );
     }
 }

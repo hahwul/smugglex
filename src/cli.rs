@@ -7,6 +7,42 @@ use std::fmt;
 /// (anything other than this default) before warning about a conflict.
 pub const DEFAULT_METHOD: &str = "POST";
 
+/// Every check name smugglex understands: the payload-string checks plus the
+/// real-HTTP/2 downgrade check. Used to validate `--checks` so a typo does not
+/// silently run zero checks and report a clean target.
+pub const KNOWN_CHECK_NAMES: [&str; 7] = [
+    "cl-te",
+    "te-cl",
+    "te-te",
+    "h2c",
+    "h2",
+    "cl-edge",
+    "h2-downgrade",
+];
+
+/// Return the names in a comma-separated `--checks` value that match no known
+/// check (trimmed; empty segments ignored). An empty result means every
+/// requested name was recognized.
+pub fn unknown_check_names(requested: &str, known: &[&str]) -> Vec<String> {
+    requested
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter(|s| !known.contains(s))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Whether `requested` selects at least one known check. False means a typo'd
+/// `--checks` that would otherwise scan nothing.
+pub fn has_any_known_check(requested: &str, known: &[&str]) -> bool {
+    requested
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .any(|s| known.contains(&s))
+}
+
 /// Output format type
 #[derive(Debug, Clone, ValueEnum)]
 pub enum OutputFormat {
@@ -55,7 +91,7 @@ pub struct Cli {
     pub method: String,
 
     /// Socket timeout in seconds
-    #[arg(help_heading = "REQUEST", short, long, default_value_t = 10)]
+    #[arg(help_heading = "REQUEST", short, long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: u64,
 
     /// Custom headers (format: "Header: Value")
@@ -240,5 +276,48 @@ impl Cli {
         } else {
             self.format.clone()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_check_names_flags_only_unrecognized() {
+        // A mix of valid and typo'd names returns just the unknown ones.
+        assert_eq!(
+            unknown_check_names("clte,cl-te,h2", &KNOWN_CHECK_NAMES),
+            vec!["clte".to_string()]
+        );
+        // All valid → empty.
+        assert!(unknown_check_names("cl-te, te-cl , h2-downgrade", &KNOWN_CHECK_NAMES).is_empty());
+        // Empty segments are ignored.
+        assert!(unknown_check_names("cl-te,,  ,h2", &KNOWN_CHECK_NAMES).is_empty());
+        // All invalid → every name reported.
+        assert_eq!(
+            unknown_check_names("clte,CL-TE,cl_te", &KNOWN_CHECK_NAMES),
+            vec!["clte".to_string(), "CL-TE".to_string(), "cl_te".to_string()]
+        );
+    }
+
+    #[test]
+    fn has_any_known_check_detects_all_typos() {
+        assert!(has_any_known_check("clte,cl-te", &KNOWN_CHECK_NAMES));
+        assert!(has_any_known_check("h2-downgrade", &KNOWN_CHECK_NAMES));
+        // A wholly typo'd selection must report no known check (the dangerous
+        // case: scanning nothing while reporting a clean target).
+        assert!(!has_any_known_check("clte", &KNOWN_CHECK_NAMES));
+        assert!(!has_any_known_check("CL-TE,cl_te", &KNOWN_CHECK_NAMES));
+        assert!(!has_any_known_check("  , ,", &KNOWN_CHECK_NAMES));
+    }
+
+    #[test]
+    fn timeout_zero_is_rejected_at_parse_time() {
+        // `-t 0` makes every request elapse instantly; clap must reject it.
+        assert!(Cli::try_parse_from(["smugglex", "http://x", "-t", "0"]).is_err());
+        // A positive timeout still parses.
+        let cli = Cli::try_parse_from(["smugglex", "http://x", "-t", "5"]).unwrap();
+        assert_eq!(cli.timeout, 5);
     }
 }

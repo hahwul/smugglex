@@ -202,3 +202,48 @@ async fn test_send_request_large_response() {
     assert!(response.contains("HTTP/1.1 200 OK"));
     assert!(response.contains(&large_body));
 }
+
+#[tokio::test]
+async fn test_pipeline_requests_preserves_responses_on_timeout() {
+    use smugglex::http::pipeline_requests;
+
+    let port = 8085;
+    // Server: answer the first request fully, then accept the second and never
+    // reply, forcing the pipelined exchange to stall until its own timeout.
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nAB")
+                .await
+                .unwrap();
+            // Second request: consumed but never answered.
+            let _ = socket.read(&mut buf).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let requests = vec![
+        "GET /a HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+        "GET /b HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+    ];
+    let responses = pipeline_requests("127.0.0.1", port, &requests, 1, false, false)
+        .await
+        .unwrap();
+
+    // The first response must survive even though the second request stalls past
+    // the timeout (previously the whole batch was discarded to an empty Vec).
+    assert_eq!(
+        responses.len(),
+        1,
+        "first response should survive the timeout"
+    );
+    assert!(responses[0].contains("HTTP/1.1 200 OK"));
+    assert!(responses[0].contains("AB"));
+}

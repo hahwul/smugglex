@@ -7,6 +7,38 @@ use crate::error::Result;
 use crate::model::{BatchScanResults, BatchSummary, CheckResult, FingerprintInfo, ScanResults};
 use crate::utils::{LogLevel, log};
 
+/// Atomically write `contents` to `path`: write to a sibling temp file, flush,
+/// then rename it over the destination. A failure during the write leaves any
+/// existing file at `path` untouched (the partial temp file is removed) instead
+/// of truncating a previously-valid report, which is what `File::create`
+/// followed by a failed `write_all` would do.
+fn atomic_write(path: &str, contents: &str) -> std::io::Result<()> {
+    let dest = std::path::Path::new(path);
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("smugglex-output");
+    // Temp file alongside the destination so the final rename stays on the same
+    // filesystem (a cross-device rename would fail). Tag with the PID to avoid
+    // clashing with any concurrent writer.
+    let tmp_name = format!(".{}.{}.tmp", name, std::process::id());
+    let tmp = match dest.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(dir) => dir.join(tmp_name),
+        None => std::path::PathBuf::from(tmp_name),
+    };
+
+    let write = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.flush()
+    })();
+    if let Err(e) = write.and_then(|()| fs::rename(&tmp, dest)) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// Log scan results in the specified output format (plain text or JSON).
 pub fn log_scan_results(
     results: &[CheckResult],
@@ -125,8 +157,7 @@ pub fn save_results_to_file(
             &format!("overwriting existing file: {}", output_file),
         );
     }
-    let mut file = fs::File::create(output_file)?;
-    file.write_all(json_output.as_bytes())?;
+    atomic_write(output_file, &json_output)?;
     log(LogLevel::Info, &format!("results saved to {}", output_file));
     Ok(())
 }
@@ -185,11 +216,44 @@ pub fn save_batch_to_file(batch: &BatchScanResults, output_file: &str) -> crate:
             &format!("overwriting existing file: {}", output_file),
         );
     }
-    let mut file = fs::File::create(output_file)?;
-    file.write_all(json_output.as_bytes())?;
+    atomic_write(output_file, &json_output)?;
     log(
         LogLevel::Info,
         &format!("batch results saved to {}", output_file),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_overwrites_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("smugglex-atomic-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let dest = dir.join("report.json");
+        let dest_str = dest.to_str().unwrap();
+
+        atomic_write(dest_str, "OLD").unwrap();
+        // Overwriting must leave a complete, valid final file (not a truncated one).
+        atomic_write(dest_str, "NEW-CONTENT").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "NEW-CONTENT");
+
+        // The sibling temp file must be renamed away, not left behind.
+        let leftover_tmp = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
+        assert!(!leftover_tmp, "temp file should be renamed/removed");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_errors_on_unwritable_path() {
+        // Parent directory does not exist → error surfaced, nothing created.
+        let res = atomic_write("/nonexistent-smugglex-dir/sub/report.json", "DATA");
+        assert!(res.is_err());
+    }
 }
