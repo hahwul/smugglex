@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Second-request desync detection: when a CL.TE/TE.CL/TE.TE check finds no direct anomaly, smugglex now plants a TE payload and probes fresh follow-up requests for structural divergence (non-5xx status or body) from the baseline, reproduced across two independent plant+probe sequences. This catches "second-request" smuggling where the attack response itself is a clean `200` and only the *following* request on the shared upstream connection is corrupted — including the real socket-level lab in `lab/desync/`, which was previously missed by the `cl-te` check. Surfaced via the new `second_request_desync` detection signal.
 - Lab harness scenarios (`lab/validate.cr`): three stateful `TP_second_request_*` true positives and three new false positives (`FP_followup_503_overload`, `FP_te_request_405`, `FP_transient_404`) guarding the new probe against 5xx overload, attack-response status differences, and non-recurring transients.
 
+### Changed
+- Refactored the TLS configuration plumbing: the six near-identical per-protocol/per-mode builders collapse into a single `build_config` plus a shared `load_ca_roots`, and the HTTP/2 config is now built and cached once at init time so `--cacert` no longer re-reads and re-parses the CA file on every h2 probe. `--insecure` warns when `--cacert` is also supplied (since `-k` takes precedence), and the config getters fall back to a default config instead of panicking when TLS init is skipped (#115).
+- Replaced the archived `rustls-pemfile` crate with `rustls-pki-types`' built-in PEM parsing for `--cacert` (#116).
+
+### Fixed
+- `--insecure`/`-k` now advertises the active crypto provider's full set of signature schemes (including ECDSA P-521 and others previously omitted) instead of a hardcoded list, so servers presenting such certificates are reachable in insecure mode rather than failing the handshake before verification (#114).
+
 ## 0.3.0
 
 ### Added

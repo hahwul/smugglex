@@ -1,5 +1,6 @@
 use colored::*;
-use rustls::pki_types::ServerName;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, ServerName};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -10,8 +11,13 @@ use url::Url;
 
 use crate::error::{Result, SmugglexError};
 
-// Initializable TLS configuration
+// Cached TLS client configs, built once by `init_tls_config`. HTTP/1.1 and
+// HTTP/2 need separate configs because they advertise different ALPN protocols,
+// but they share the same trust policy. Caching the h2 config here (rather than
+// rebuilding it per probe) keeps `--cacert` from re-reading and re-parsing the
+// CA file from disk on every h2 connection.
 static TLS_CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+static H2_TLS_CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
 
 /// A certificate verifier that accepts any certificate (for --insecure mode).
 #[derive(Debug)]
@@ -48,46 +54,33 @@ impl rustls::client::danger::ServerCertVerifier for PermitAnyCert {
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        use rustls::SignatureScheme;
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-        ]
+        // Delegate to the active crypto provider instead of hardcoding a list.
+        // rustls uses this both to build the `signature_algorithms` extension
+        // and to filter the server's `CertificateVerify` *before*
+        // `verify_tls1x_signature` runs. Any scheme missing here (e.g. ECDSA
+        // P-521 or Ed448) makes the handshake abort before this accept-anything
+        // verifier is ever consulted — leaving `--insecure` *less* compatible
+        // than normal mode. The provider is guaranteed to be installed by the
+        // time a handshake runs (building a `ClientConfig` installs the crate's
+        // default provider), so the empty fallback is unreachable in practice.
+        rustls::crypto::CryptoProvider::get_default()
+            .map(|p| p.signature_verification_algorithms.supported_schemes())
+            .unwrap_or_default()
     }
 }
 
-/// Build the default TLS config with webpki roots.
-fn build_default_tls_config() -> Arc<rustls::ClientConfig> {
+/// A fresh root store seeded with the bundled webpki trust anchors.
+fn webpki_root_store() -> rustls::RootCertStore {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    Arc::new(
-        rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth(),
-    )
+    root_store
 }
 
-/// Build an insecure TLS config that skips all certificate verification.
-fn build_insecure_tls_config() -> Arc<rustls::ClientConfig> {
-    Arc::new(
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PermitAnyCert))
-            .with_no_client_auth(),
-    )
-}
-
-/// Build a TLS config with webpki roots plus a custom CA cert file.
-fn build_custom_ca_tls_config(ca_path: &Path) -> Result<Arc<rustls::ClientConfig>> {
-    let mut root_store = rustls::RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+/// Load CA certificates from a PEM file into a root store seeded with the
+/// webpki roots. PEM parsing goes through `rustls-pki-types`' own `pem`
+/// support, so no separate (archived) PEM crate is needed.
+fn load_ca_roots(ca_path: &Path) -> Result<rustls::RootCertStore> {
+    let mut root_store = webpki_root_store();
 
     let pem_data = std::fs::read(ca_path).map_err(|e| {
         SmugglexError::Io(format!(
@@ -96,8 +89,7 @@ fn build_custom_ca_tls_config(ca_path: &Path) -> Result<Arc<rustls::ClientConfig
             e
         ))
     })?;
-    let mut reader = std::io::BufReader::new(pem_data.as_slice());
-    let certs: Vec<rustls::pki_types::CertificateDer<'_>> = rustls_pemfile::certs(&mut reader)
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&pem_data)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| SmugglexError::Tls(format!("failed to parse CA cert: {}", e)))?;
 
@@ -114,123 +106,78 @@ fn build_custom_ca_tls_config(ca_path: &Path) -> Result<Arc<rustls::ClientConfig
             .map_err(|e| SmugglexError::Tls(format!("failed to add CA cert: {}", e)))?;
     }
 
-    Ok(Arc::new(
+    Ok(root_store)
+}
+
+/// Build a single TLS client config for the given trust policy. `alpn_h2`
+/// advertises HTTP/2 (`h2`) via ALPN; the trust policy is otherwise identical
+/// between the HTTP/1.1 and HTTP/2 configs. This is the one builder that the six
+/// former per-protocol/per-mode builders collapse into.
+fn build_config(
+    insecure: bool,
+    ca_cert: Option<&Path>,
+    alpn_h2: bool,
+) -> Result<Arc<rustls::ClientConfig>> {
+    let mut config = if insecure {
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PermitAnyCert))
+            .with_no_client_auth()
+    } else {
+        let root_store = match ca_cert {
+            Some(ca_path) => load_ca_roots(ca_path)?,
+            None => webpki_root_store(),
+        };
         rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
-            .with_no_client_auth(),
-    ))
+            .with_no_client_auth()
+    };
+    if alpn_h2 {
+        config.alpn_protocols = vec![b"h2".to_vec()];
+    }
+    Ok(Arc::new(config))
 }
 
 /// Initialize the global TLS configuration. Must be called once before any
 /// network requests. `insecure` disables certificate verification; `ca_cert`
-/// adds a custom CA certificate file (PEM) alongside webpki roots.
+/// adds a custom CA certificate file (PEM) alongside webpki roots. Both the
+/// HTTP/1.1 and HTTP/2 configs are built and cached here, so h2 probes never
+/// re-read the CA file from disk.
 pub fn init_tls_config(insecure: bool, ca_cert: Option<&Path>) -> Result<()> {
-    let config = if insecure {
-        build_insecure_tls_config()
-    } else if let Some(ca_path) = ca_cert {
-        build_custom_ca_tls_config(ca_path)?
-    } else {
-        build_default_tls_config()
-    };
+    if insecure && ca_cert.is_some() {
+        eprintln!(
+            "{} --insecure overrides --cacert; TLS certificate verification is disabled",
+            "[!]".yellow().bold()
+        );
+    }
+
+    let http1 = build_config(insecure, ca_cert, false)?;
+    let http2 = build_config(insecure, ca_cert, true)?;
 
     TLS_CONFIG
-        .set(config)
+        .set(http1)
         .map_err(|_| SmugglexError::Tls("TLS config already initialized".to_string()))?;
-
-    // Save settings so HTTP/2 can build its own config with the same policy.
-    let _ = TLS_SETTINGS.set(TlsInitSettings {
-        insecure,
-        ca_cert: ca_cert.map(|p| p.to_string_lossy().into_owned()),
-    });
+    // If TLS_CONFIG was fresh (the `?` above did not bail), this one is too.
+    let _ = H2_TLS_CONFIG.set(http2);
 
     Ok(())
 }
 
-/// Return a reference to the global TLS config (HTTP/1.1).
+/// Return the cached HTTP/1.1 TLS config. If `init_tls_config` was never called
+/// (library consumers, tests), fall back to a default webpki-roots config
+/// instead of panicking; the binary always inits first.
 pub fn get_tls_config() -> &'static Arc<rustls::ClientConfig> {
     TLS_CONFIG
-        .get()
-        .expect("TLS config not initialized — call init_tls_config first")
+        .get_or_init(|| build_config(false, None, false).expect("default TLS config is infallible"))
 }
 
-/// Settings captured at init time, reused by HTTP/2 to build its own config
-/// with the same trust policy but different ALPN.
-struct TlsInitSettings {
-    insecure: bool,
-    ca_cert: Option<String>,
-}
-
-static TLS_SETTINGS: OnceLock<TlsInitSettings> = OnceLock::new();
-
-/// Build an HTTP/2 TLS config (ALPN h2) matching the global trust policy.
-pub fn build_h2_tls_config() -> Result<Arc<rustls::ClientConfig>> {
-    let settings = TLS_SETTINGS
-        .get()
-        .expect("TLS settings not initialized — call init_tls_config first");
-
-    let config = if settings.insecure {
-        build_insecure_h2_tls_config()
-    } else if let Some(ref ca_path) = settings.ca_cert {
-        build_custom_ca_h2_tls_config(Path::new(ca_path))?
-    } else {
-        build_default_h2_tls_config()
-    };
-    Ok(config)
-}
-
-fn build_default_h2_tls_config() -> Arc<rustls::ClientConfig> {
-    let mut root_store = rustls::RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let mut cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-    cfg.alpn_protocols = vec![b"h2".to_vec()];
-    Arc::new(cfg)
-}
-
-fn build_insecure_h2_tls_config() -> Arc<rustls::ClientConfig> {
-    let mut cfg = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PermitAnyCert))
-        .with_no_client_auth();
-    cfg.alpn_protocols = vec![b"h2".to_vec()];
-    Arc::new(cfg)
-}
-
-fn build_custom_ca_h2_tls_config(ca_path: &Path) -> Result<Arc<rustls::ClientConfig>> {
-    let mut root_store = rustls::RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-    let pem_data = std::fs::read(ca_path).map_err(|e| {
-        SmugglexError::Io(format!(
-            "failed to read CA cert file '{}': {}",
-            ca_path.display(),
-            e
-        ))
-    })?;
-    let mut reader = std::io::BufReader::new(pem_data.as_slice());
-    let certs: Vec<rustls::pki_types::CertificateDer<'_>> = rustls_pemfile::certs(&mut reader)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| SmugglexError::Tls(format!("failed to parse CA cert: {}", e)))?;
-
-    if certs.is_empty() {
-        return Err(SmugglexError::Tls(format!(
-            "no certificates found in CA file '{}'",
-            ca_path.display()
-        )));
-    }
-
-    for cert in certs {
-        root_store
-            .add(cert)
-            .map_err(|e| SmugglexError::Tls(format!("failed to add CA cert: {}", e)))?;
-    }
-
-    let mut cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-    cfg.alpn_protocols = vec![b"h2".to_vec()];
-    Ok(Arc::new(cfg))
+/// Return the cached HTTP/2 TLS config (ALPN `h2`), mirroring `get_tls_config`.
+/// Built once at init time, so h2 probes reuse it rather than rebuilding (and,
+/// with `--cacert`, re-reading the CA file) on every connection.
+pub fn get_h2_tls_config() -> &'static Arc<rustls::ClientConfig> {
+    H2_TLS_CONFIG.get_or_init(|| {
+        build_config(false, None, true).expect("default h2 TLS config is infallible")
+    })
 }
 
 static PROXY: OnceLock<String> = OnceLock::new();
@@ -632,6 +579,117 @@ pub async fn send_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A throwaway self-signed ECDSA P-256 certificate used only to exercise CA
+    // PEM parsing. It is not trusted for anything beyond these tests.
+    const TEST_CA_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
+MIIBizCCATGgAwIBAgIUI+T8ON5AaiTHXj9NCrnmcjbX5w0wCgYIKoZIzj0EAwIw\n\
+GzEZMBcGA1UEAwwQc211Z2dsZXgtdGVzdC1jYTAeFw0yNjA3MDIwMjE3MTRaFw0z\n\
+NjA2MjkwMjE3MTRaMBsxGTAXBgNVBAMMEHNtdWdnbGV4LXRlc3QtY2EwWTATBgcq\n\
+hkjOPQIBBggqhkjOPQMBBwNCAAS3odwa9jb2EDMyxaSJK0x3K8ClDOaqVOhl/WSD\n\
+49cSDOAY/6YtsAfemTspMIlIF72/WKXC0OOaBA91F40D5lGko1MwUTAdBgNVHQ4E\n\
+FgQUkHsScQHXJRom6fCCYxOHzDg6nnEwHwYDVR0jBBgwFoAUkHsScQHXJRom6fCC\n\
+YxOHzDg6nnEwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBxLwD7\n\
+b7gsdI1uCJNQ7DVc6fBAO6R+RC2GY54m3FBDTgIhAN4e51Gx9T9E3Z6zytX8bLCr\n\
+kJ8CRz+khnaPy0Io4PLR\n\
+-----END CERTIFICATE-----\n";
+
+    // Issue #114: the --insecure verifier must advertise the *provider's* full
+    // scheme set. rustls filters the server's CertificateVerify against this
+    // list before our accept-anything verifier is consulted, so any missing
+    // scheme (e.g. ECDSA P-521) makes such a server unreachable even with -k.
+    #[test]
+    fn permit_any_cert_advertises_provider_schemes_including_p521() {
+        use rustls::SignatureScheme;
+        use rustls::client::danger::ServerCertVerifier;
+        // Building any config installs the crate's default crypto provider, which
+        // `supported_verify_schemes` delegates to.
+        let _ = build_config(true, None, false).unwrap();
+        let schemes = PermitAnyCert.supported_verify_schemes();
+        assert!(
+            !schemes.is_empty(),
+            "verifier must advertise the provider's schemes, not an empty list"
+        );
+        // P-521 was missing from the old hardcoded list — the core of the bug.
+        assert!(
+            schemes.contains(&SignatureScheme::ECDSA_NISTP521_SHA512),
+            "P-521 must be advertised so --insecure can reach P-521 servers"
+        );
+        // Regression guard: previously-advertised schemes must remain.
+        assert!(schemes.contains(&SignatureScheme::ECDSA_NISTP256_SHA256));
+        assert!(schemes.contains(&SignatureScheme::ED25519));
+    }
+
+    // Issue #115: one builder for both protocols; only the h2 variant advertises
+    // ALPN `h2`, and the insecure variant needs no trust roots to build.
+    #[test]
+    fn build_config_sets_alpn_only_for_h2() {
+        let http1 = build_config(false, None, false).unwrap();
+        assert!(
+            http1.alpn_protocols.is_empty(),
+            "HTTP/1.1 config must not advertise h2"
+        );
+        let http2 = build_config(false, None, true).unwrap();
+        assert_eq!(
+            http2.alpn_protocols,
+            vec![b"h2".to_vec()],
+            "h2 config must advertise ALPN h2"
+        );
+        let insecure_h2 = build_config(true, None, true).unwrap();
+        assert_eq!(insecure_h2.alpn_protocols, vec![b"h2".to_vec()]);
+    }
+
+    // Issue #116: CA PEM parsing now goes through rustls-pki-types instead of the
+    // archived rustls-pemfile crate. Cover the success path plus the two error
+    // paths (missing file -> Io, no certs -> Tls).
+    #[test]
+    fn load_ca_roots_parses_pem_and_reports_errors() {
+        use std::io::Write;
+
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+
+        // A valid cert is added on top of the webpki baseline.
+        let baseline = webpki_root_store().len();
+        let good = dir.join(format!("smugglex_ca_good_{pid}.pem"));
+        std::fs::File::create(&good)
+            .unwrap()
+            .write_all(TEST_CA_PEM.as_bytes())
+            .unwrap();
+        let roots = load_ca_roots(&good).expect("valid PEM cert should parse");
+        assert_eq!(
+            roots.len(),
+            baseline + 1,
+            "the custom CA must be added on top of the webpki roots"
+        );
+        let _ = std::fs::remove_file(&good);
+
+        // An empty PEM file yields a clear Tls "no certificates" error.
+        let empty = dir.join(format!("smugglex_ca_empty_{pid}.pem"));
+        std::fs::File::create(&empty).unwrap();
+        assert!(matches!(load_ca_roots(&empty), Err(SmugglexError::Tls(_))));
+        let _ = std::fs::remove_file(&empty);
+
+        // A missing file surfaces an Io error, distinct from a parse failure.
+        let missing = dir.join(format!("smugglex_ca_missing_{pid}.pem"));
+        let _ = std::fs::remove_file(&missing);
+        assert!(matches!(load_ca_roots(&missing), Err(SmugglexError::Io(_))));
+    }
+
+    // Issue #115 (item 3): the getters must not panic when init was skipped;
+    // they lazily fall back to a default config.
+    #[test]
+    fn tls_config_getters_fall_back_without_init() {
+        assert!(
+            get_tls_config().alpn_protocols.is_empty(),
+            "default HTTP/1.1 config advertises no ALPN"
+        );
+        assert_eq!(
+            get_h2_tls_config().alpn_protocols,
+            vec![b"h2".to_vec()],
+            "default h2 config advertises ALPN h2"
+        );
+    }
 
     #[test]
     fn find_subsequence_locates_header_terminator() {
