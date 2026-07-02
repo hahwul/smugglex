@@ -186,8 +186,7 @@ fn status_from_indexed(byte: u8) -> Option<u16> {
 }
 
 async fn h2_connect(host: &str, port: u16) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
-    let cfg = crate::http::build_h2_tls_config()?;
-    let connector = TlsConnector::from(cfg);
+    let connector = TlsConnector::from(std::sync::Arc::clone(crate::http::get_h2_tls_config()));
     let tcp = TcpStream::connect((host, port)).await?;
     let dnsname = rustls::pki_types::ServerName::try_from(host.to_string())?;
     let tls = connector.connect(dnsname, tcp).await?;
