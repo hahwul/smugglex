@@ -109,33 +109,49 @@ fn load_ca_roots(ca_path: &Path) -> Result<rustls::RootCertStore> {
     Ok(root_store)
 }
 
-/// Build a single TLS client config for the given trust policy. `alpn_h2`
+/// A resolved certificate-trust policy, computed once and shared by both the
+/// HTTP/1.1 and HTTP/2 configs. Resolving it here (rather than inside the
+/// per-protocol builder) means the `--cacert` file is read and PEM-parsed
+/// exactly once, not once per protocol.
+enum Trust {
+    /// Accept any certificate (`--insecure`).
+    AcceptAny,
+    /// Verify against these roots (webpki, optionally plus a custom CA).
+    Roots(rustls::RootCertStore),
+}
+
+/// Resolve the trust policy from the CLI flags. This is the only fallible,
+/// disk-touching step; it runs once per process.
+fn resolve_trust(insecure: bool, ca_cert: Option<&Path>) -> Result<Trust> {
+    if insecure {
+        return Ok(Trust::AcceptAny);
+    }
+    let roots = match ca_cert {
+        Some(ca_path) => load_ca_roots(ca_path)?,
+        None => webpki_root_store(),
+    };
+    Ok(Trust::Roots(roots))
+}
+
+/// Build a TLS client config from already-resolved trust material. `alpn_h2`
 /// advertises HTTP/2 (`h2`) via ALPN; the trust policy is otherwise identical
-/// between the HTTP/1.1 and HTTP/2 configs. This is the one builder that the six
-/// former per-protocol/per-mode builders collapse into.
-fn build_config(
-    insecure: bool,
-    ca_cert: Option<&Path>,
-    alpn_h2: bool,
-) -> Result<Arc<rustls::ClientConfig>> {
-    let mut config = if insecure {
-        rustls::ClientConfig::builder()
+/// between the HTTP/1.1 and HTTP/2 configs. Infallible — all fallible work
+/// happened in `resolve_trust`. This is the one builder that the six former
+/// per-protocol/per-mode builders collapse into.
+fn build_config(trust: &Trust, alpn_h2: bool) -> Arc<rustls::ClientConfig> {
+    let mut config = match trust {
+        Trust::AcceptAny => rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(PermitAnyCert))
-            .with_no_client_auth()
-    } else {
-        let root_store = match ca_cert {
-            Some(ca_path) => load_ca_roots(ca_path)?,
-            None => webpki_root_store(),
-        };
-        rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth()
+            .with_no_client_auth(),
+        Trust::Roots(roots) => rustls::ClientConfig::builder()
+            .with_root_certificates(roots.clone())
+            .with_no_client_auth(),
     };
     if alpn_h2 {
         config.alpn_protocols = vec![b"h2".to_vec()];
     }
-    Ok(Arc::new(config))
+    Arc::new(config)
 }
 
 /// Initialize the global TLS configuration. Must be called once before any
@@ -151,14 +167,24 @@ pub fn init_tls_config(insecure: bool, ca_cert: Option<&Path>) -> Result<()> {
         );
     }
 
-    let http1 = build_config(insecure, ca_cert, false)?;
-    let http2 = build_config(insecure, ca_cert, true)?;
+    // Resolve the trust policy once (reading/parsing `--cacert` a single time),
+    // then build both protocol configs from the same shared material.
+    let trust = resolve_trust(insecure, ca_cert)?;
+    let http1 = build_config(&trust, false);
+    let http2 = build_config(&trust, true);
 
+    // Commit both slots, surfacing a conflict from either. A conflict can only
+    // arise if a getter's `get_or_init` fallback already seeded a slot before
+    // init ran — i.e. init was called after the config was first used,
+    // violating the "init before any request" contract. Failing loudly there
+    // beats silently running with mismatched HTTP/1.1 and HTTP/2 trust policies
+    // (the two slots are independent `OnceLock`s, so they must be kept in sync).
     TLS_CONFIG
         .set(http1)
         .map_err(|_| SmugglexError::Tls("TLS config already initialized".to_string()))?;
-    // If TLS_CONFIG was fresh (the `?` above did not bail), this one is too.
-    let _ = H2_TLS_CONFIG.set(http2);
+    H2_TLS_CONFIG
+        .set(http2)
+        .map_err(|_| SmugglexError::Tls("TLS config already initialized".to_string()))?;
 
     Ok(())
 }
@@ -167,17 +193,14 @@ pub fn init_tls_config(insecure: bool, ca_cert: Option<&Path>) -> Result<()> {
 /// (library consumers, tests), fall back to a default webpki-roots config
 /// instead of panicking; the binary always inits first.
 pub fn get_tls_config() -> &'static Arc<rustls::ClientConfig> {
-    TLS_CONFIG
-        .get_or_init(|| build_config(false, None, false).expect("default TLS config is infallible"))
+    TLS_CONFIG.get_or_init(|| build_config(&Trust::Roots(webpki_root_store()), false))
 }
 
 /// Return the cached HTTP/2 TLS config (ALPN `h2`), mirroring `get_tls_config`.
 /// Built once at init time, so h2 probes reuse it rather than rebuilding (and,
 /// with `--cacert`, re-reading the CA file) on every connection.
 pub fn get_h2_tls_config() -> &'static Arc<rustls::ClientConfig> {
-    H2_TLS_CONFIG.get_or_init(|| {
-        build_config(false, None, true).expect("default h2 TLS config is infallible")
-    })
+    H2_TLS_CONFIG.get_or_init(|| build_config(&Trust::Roots(webpki_root_store()), true))
 }
 
 static PROXY: OnceLock<String> = OnceLock::new();
@@ -604,7 +627,7 @@ kJ8CRz+khnaPy0Io4PLR\n\
         use rustls::client::danger::ServerCertVerifier;
         // Building any config installs the crate's default crypto provider, which
         // `supported_verify_schemes` delegates to.
-        let _ = build_config(true, None, false).unwrap();
+        let _ = build_config(&Trust::AcceptAny, false);
         let schemes = PermitAnyCert.supported_verify_schemes();
         assert!(
             !schemes.is_empty(),
@@ -624,19 +647,55 @@ kJ8CRz+khnaPy0Io4PLR\n\
     // ALPN `h2`, and the insecure variant needs no trust roots to build.
     #[test]
     fn build_config_sets_alpn_only_for_h2() {
-        let http1 = build_config(false, None, false).unwrap();
+        let http1 = build_config(&Trust::Roots(webpki_root_store()), false);
         assert!(
             http1.alpn_protocols.is_empty(),
             "HTTP/1.1 config must not advertise h2"
         );
-        let http2 = build_config(false, None, true).unwrap();
+        let http2 = build_config(&Trust::Roots(webpki_root_store()), true);
         assert_eq!(
             http2.alpn_protocols,
             vec![b"h2".to_vec()],
             "h2 config must advertise ALPN h2"
         );
-        let insecure_h2 = build_config(true, None, true).unwrap();
+        let insecure_h2 = build_config(&Trust::AcceptAny, true);
         assert_eq!(insecure_h2.alpn_protocols, vec![b"h2".to_vec()]);
+    }
+
+    // Issue #115 (review follow-up): the trust policy is resolved once and both
+    // protocol configs are built from that single shared `Trust`, so the
+    // `--cacert` file is read and parsed exactly once instead of per protocol.
+    #[test]
+    fn resolve_trust_resolves_once_and_feeds_both_configs() {
+        use std::io::Write;
+
+        // --insecure => accept-any, no roots touched.
+        assert!(matches!(
+            resolve_trust(true, None).unwrap(),
+            Trust::AcceptAny
+        ));
+
+        // --cacert => a single resolved root store carrying the custom CA on top
+        // of the webpki baseline, reusable for both the h1 and h2 configs.
+        let dir = std::env::temp_dir();
+        let good = dir.join(format!("smugglex_trust_ca_{}.pem", std::process::id()));
+        std::fs::File::create(&good)
+            .unwrap()
+            .write_all(TEST_CA_PEM.as_bytes())
+            .unwrap();
+        let baseline = webpki_root_store().len();
+        let trust = resolve_trust(false, Some(&good)).unwrap();
+        let _ = std::fs::remove_file(&good);
+        match &trust {
+            Trust::Roots(roots) => assert_eq!(roots.len(), baseline + 1),
+            Trust::AcceptAny => panic!("expected Roots for --cacert"),
+        }
+        // The one resolved policy builds both protocol configs.
+        assert!(build_config(&trust, false).alpn_protocols.is_empty());
+        assert_eq!(
+            build_config(&trust, true).alpn_protocols,
+            vec![b"h2".to_vec()]
+        );
     }
 
     // Issue #116: CA PEM parsing now goes through rustls-pki-types instead of the
