@@ -1,44 +1,40 @@
+/* Table of contents — builds from headings, highlights active via
+   IntersectionObserver (no scroll listeners). */
 document.addEventListener('DOMContentLoaded', function () {
-  const main = document.querySelector('.docs-main');
-  const tocNav = document.getElementById('tocNav');
-  const tocAside = document.getElementById('docsToc');
+  var main = document.querySelector('.docs-main');
+  var tocNav = document.getElementById('tocNav');
+  var tocAside = document.getElementById('docsToc');
   if (!main || !tocNav || !tocAside) return;
 
-  const headings = main.querySelectorAll('h2[id], h3[id]');
-  if (headings.length < 2) {
-    tocAside.classList.add('hidden');
-    return;
-  }
+  var headings = main.querySelectorAll('h2[id], h3[id]');
+  if (headings.length < 2) { tocAside.classList.add('hidden'); return; }
 
   headings.forEach(function (h) {
-    const a = document.createElement('a');
+    var a = document.createElement('a');
     a.href = '#' + h.id;
     a.textContent = h.textContent;
     if (h.tagName === 'H3') a.classList.add('toc-h3');
     tocNav.appendChild(a);
   });
 
-  var tocLinks = tocNav.querySelectorAll('a');
-  var ticking = false;
-
-  function updateActive() {
-    var scrollY = window.scrollY + 80;
-    var current = null;
-    headings.forEach(function (h) {
-      if (h.offsetTop <= scrollY) current = h.id;
-    });
-    tocLinks.forEach(function (link) {
-      link.classList.toggle('active', link.getAttribute('href') === '#' + current);
-    });
-    ticking = false;
+  var links = tocNav.querySelectorAll('a');
+  function setActive(id) {
+    links.forEach(function (l) { l.classList.toggle('active', l.getAttribute('href') === '#' + id); });
   }
 
-  window.addEventListener('scroll', function () {
-    if (!ticking) {
-      requestAnimationFrame(updateActive);
-      ticking = true;
-    }
-  });
+  if (!('IntersectionObserver' in window)) { setActive(headings[0].id); return; }
 
-  updateActive();
+  var visible = {};
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) { visible[e.target.id] = e.isIntersecting; });
+    var current = null;
+    headings.forEach(function (h) { if (!current && visible[h.id]) current = h.id; });
+    if (!current) {
+      headings.forEach(function (h) { if (h.getBoundingClientRect().top < 120) current = h.id; });
+    }
+    if (current) setActive(current);
+  }, { rootMargin: '-70px 0px -70% 0px', threshold: 0 });
+
+  headings.forEach(function (h) { io.observe(h); });
+  setActive(headings[0].id);
 });

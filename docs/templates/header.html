@@ -4,10 +4,48 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="{{ page.description }}">
+  <meta name="theme-color" content="#08090b">
   <title>{{ page.title }} - {{ site.title }}</title>
   {{ og_all_tags }}
+  <link rel="preconnect" href="{{ base_url }}">
+  <link rel="preload" as="font" type="font/woff2" href="{{ base_url }}/fonts/space-grotesk-700.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="{{ base_url }}/fonts/space-grotesk-400.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="{{ base_url }}/fonts/jetbrains-mono-400.woff2" crossorigin>
   <link rel="stylesheet" href="{{ base_url }}/css/style.css">
   {{ highlight_css }}
   {{ auto_includes_css }}
 </head>
 <body data-section="{{ page.section }}">
+<a class="skip-link" href="#main">Skip to content</a>
+{% include "icons.html" %}
+<nav class="nav nav-docs">
+  <button class="nav-toggle" aria-label="Toggle navigation" onclick="toggleNav()"><svg class="ico"><use href="#i-menu"/></svg></button>
+  <a href="{{ base_url }}/" class="brand">
+    <img src="{{ base_url }}/images/logo-single.png" alt="">
+    <span class="name">smuggle<b>x</b></span>
+  </a>
+  <div class="nav-links">
+    <a href="{{ base_url }}/usage/">Docs</a>
+    <a href="{{ base_url }}/checks/">Checks</a>
+    <a href="{{ base_url }}/advanced/">Advanced</a>
+  </div>
+  <div class="nav-right">
+    <button class="search-trigger" onclick="openSearch()" title="Search" aria-label="Search">
+      <svg class="ico"><use href="#i-search"/></svg>
+      <span>Search</span>
+      <kbd>&#8984;K</kbd>
+    </button>
+    <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener" aria-label="GitHub"><svg class="ico"><use href="#i-github"/></svg></a>
+  </div>
+</nav>
+<div class="nav-scrim" onclick="closeNav()"></div>
+<div class="search-overlay" id="searchOverlay" onclick="if(event.target===this)closeSearch()">
+  <div class="search-modal">
+    <div class="search-input-wrap">
+      <svg class="ico"><use href="#i-search"/></svg>
+      <input type="text" id="searchInput" placeholder="Search documentation..." autocomplete="off" aria-label="Search documentation">
+      <kbd onclick="closeSearch()">ESC</kbd>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
