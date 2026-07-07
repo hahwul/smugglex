@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="smugglex is a fast, Rust-powered HTTP Request Smuggling scanner. Detect CL.TE, TE.CL, TE.TE, H2C, H2 downgrade and CL-Edge desync with timing-based detection.">
+  <meta name="theme-color" content="#08090b">
+  <title>smugglex - HTTP Request Smuggling Scanner</title>
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="smugglex - HTTP Request Smuggling Scanner">
+  <meta property="og:description" content="Fast, Rust-powered HTTP Request Smuggling scanner. Timing-based, protocol-aware desync detection for security researchers.">
+  <meta property="og:url" content="{{ base_url }}/">
+  <meta property="og:image" content="{{ base_url }}/images/preview.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="smugglex - HTTP Request Smuggling Scanner">
+  <meta name="twitter:description" content="Fast, Rust-powered HTTP Request Smuggling scanner. Timing-based, protocol-aware desync detection.">
+  <meta name="twitter:image" content="{{ base_url }}/images/preview.jpg">
+  <link rel="preconnect" href="{{ base_url }}">
+  <link rel="preload" as="font" type="font/woff2" href="{{ base_url }}/fonts/space-grotesk-700.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="{{ base_url }}/fonts/space-grotesk-400.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="{{ base_url }}/fonts/jetbrains-mono-400.woff2" crossorigin>
+  <link rel="stylesheet" href="{{ base_url }}/css/style.css">
+</head>
+<body data-page="home">
+<a class="skip-link" href="#main">Skip to content</a>
+{% include "icons.html" %}
+
+<nav class="nav nav-landing">
+  <a href="{{ base_url }}/" class="brand">
+    <img src="{{ base_url }}/images/logo-single.png" alt="">
+    <span class="name">smuggle<b>x</b></span>
+  </a>
+  <div class="nav-links">
+    <a href="{{ base_url }}/usage/">Docs</a>
+    <a href="{{ base_url }}/checks/">Checks</a>
+    <a href="{{ base_url }}/advanced/">Advanced</a>
+  </div>
+  <div class="nav-right">
+    <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener" aria-label="GitHub"><svg class="ico" style="font-size:1.25rem"><use href="#i-github"/></svg></a>
+    <a href="{{ base_url }}/usage/" class="btn btn-sm">Get started</a>
+  </div>
+  <button class="nav-toggle" aria-label="Toggle menu" onclick="toggleNav()"><svg class="ico"><use href="#i-menu"/></svg></button>
+</nav>
+<div class="nav-scrim" onclick="closeNav()"></div>
+
+<main class="landing" id="main">
+
+  <!-- HERO -->
+  <header class="hero wrap">
+    <div class="hero-bg"></div>
+    <div class="hero-copy">
+      <span class="eyebrow reveal">HTTP desync scanner</span>
+      <h1 class="reveal" style="--d:.05s">Hunt HTTP request <span class="venom">smuggling.</span></h1>
+      <p class="lede reveal" style="--d:.12s">smugglex finds where front-end and back-end servers disagree on request boundaries. Timing-based, protocol-aware, and written in Rust.</p>
+      <div class="hero-cta reveal" style="--d:.18s">
+        <a href="{{ base_url }}/usage/" class="btn btn-primary">Get started <svg class="ico"><use href="#i-arrow-right"/></svg></a>
+        <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener" class="btn btn-ghost"><svg class="ico"><use href="#i-github"/></svg> View on GitHub</a>
+      </div>
+    </div>
+    <div class="hero-art reveal" style="--d:.1s" aria-hidden="true">
+      <div class="ring"></div>
+      <img class="serpent" src="{{ base_url }}/images/logo-single.png" alt="">
+    </div>
+  </header>
+
+  <!-- INSTALL + TERMINAL -->
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <h2>Scan in one command.</h2>
+        <p style="margin-left:auto;margin-right:auto;">One static binary. Point it at a target, or pipe in a list, and get structured findings back.</p>
+      </div>
+      <div class="reveal" style="--d:.06s">
+        <div class="install-bar">
+          <span class="prompt">$</span>
+          <code>brew install hahwul/smugglex/smugglex</code>
+          <button class="copy-btn" data-clip="brew install hahwul/smugglex/smugglex" onclick="copyClip(this)"><svg class="ico"><use href="#i-copy"/></svg> copy</button>
+        </div>
+        <p class="install-note">Also available via Cargo, Nix, Snap, and prebuilt binaries.</p>
+      </div>
+      <div class="term reveal" style="--d:.1s">
+        <div class="term-bar">
+          <svg class="ico"><use href="#i-terminal"/></svg>
+          <span class="title">smugglex</span>
+        </div>
+        <div class="term-body"><pre><span class="c-prompt">$</span> <span class="c-cmd">smugglex https://target.com</span>
+
+<span class="c-vuln">[VULNERABLE]</span> CL.TE - https://target.com <span class="c-dim">(payload #3)</span>
+  <span class="c-dim">Normal:</span> 200 <span class="c-num">(45ms)</span> <span class="c-dim">| Attack:</span> 200 <span class="c-num">(5023ms)</span>
+<span class="c-ok">[OK]</span> TE.CL - https://target.com
+<span class="c-ok">[OK]</span> TE.TE - https://target.com
+<span class="c-ok">[OK]</span> H2C - https://target.com
+<span class="c-vuln">[VULNERABLE]</span> H2 - https://target.com <span class="c-dim">(h2-downgrade)</span>
+<span class="c-ok">[OK]</span> CL-Edge - https://target.com
+
+<span class="c-dim"># 2 vulnerable checks &middot; exit code 1</span></pre></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CHECKS -->
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2>Six ways servers disagree.</h2>
+        <p>Each check targets one parser mismatch between the front-end and the back-end. Run the whole suite, or select with <code>-c</code>.</p>
+      </div>
+      <div class="checks-grid">
+        <a href="{{ base_url }}/checks/cl-te/" class="check feature wide reveal">
+          <span class="tag">CL.TE</span>
+          <p>Content-Length says one thing, Transfer-Encoding says another. The classic desync, confirmed by timing.</p>
+          <div class="timing">
+            <div class="row"><span>baseline</span><span class="track"><span class="fill normal"></span></span><span class="val">45 ms</span></div>
+            <div class="row"><span>payload</span><span class="track"><span class="fill attack"></span></span><span class="val">5023 ms</span></div>
+          </div>
+          <span class="go">Read the technique <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="{{ base_url }}/checks/h2/" class="check tex-scale reveal" style="--d:.05s">
+          <span class="tag">H2</span>
+          <p>HTTP/2 to HTTP/1.1 downgrade over real ALPN h2. Catches H2.CL and H2.TE.</p>
+          <span class="go">Read the technique <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="{{ base_url }}/checks/te-cl/" class="check reveal">
+          <span class="tag">TE.CL</span>
+          <p>Transfer-Encoding vs Content-Length. The mirror image of CL.TE.</p>
+          <span class="go">Read <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="{{ base_url }}/checks/te-te/" class="check reveal" style="--d:.05s">
+          <span class="tag">TE.TE</span>
+          <p>Transfer-Encoding obfuscation. Over 40 header variants are tried.</p>
+          <span class="go">Read <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="{{ base_url }}/checks/h2c/" class="check reveal" style="--d:.1s">
+          <span class="tag">H2C</span>
+          <p>HTTP/2 cleartext upgrade smuggling against h2c-capable proxies.</p>
+          <span class="go">Read <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="{{ base_url }}/checks/cl-edge/" class="check full reveal">
+          <span class="tag">CL-Edge</span>
+          <p>Content-Length edge cases. Malformed, duplicated and whitespace-padded length headers that slip past a validator but split at the next hop.</p>
+          <span class="go">Read the technique <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2>Timing tells the truth.</h2>
+        <p>No guessing from response bodies. smugglex measures how long the back-end takes to answer, then compares against a clean baseline.</p>
+      </div>
+      <div class="steps">
+        <div class="step reveal">
+          <svg class="ico" style="font-size:1.5rem;color:var(--acid)"><use href="#i-clock"/></svg>
+          <h3>Measure the baseline</h3>
+          <p>It sends a few clean requests, three by default, and records how fast the server normally responds.</p>
+        </div>
+        <div class="step reveal" style="--d:.07s">
+          <svg class="ico" style="font-size:1.5rem;color:var(--acid)"><use href="#i-bolt"/></svg>
+          <h3>Send the payload</h3>
+          <p>Then it delivers desync payloads crafted for each technique against the same endpoint.</p>
+        </div>
+        <div class="step reveal" style="--d:.14s">
+          <svg class="ico" style="font-size:1.5rem;color:var(--acid)"><use href="#i-gauge"/></svg>
+          <h3>Compare the timing</h3>
+          <p>A reply that stalls past three times baseline, or a full second longer, means the parsers disagreed.</p>
+        </div>
+      </div>
+      <div class="how-viz reveal" style="--d:.1s">
+        <div class="vrow"><span class="vlabel">clean baseline</span><span class="vtrack"><span class="vfill a"></span></span><span class="vval">45 ms</span></div>
+        <div class="vrow"><span class="vlabel">CL.TE payload</span><span class="vtrack"><span class="vfill b"></span></span><span class="vval hit">5023 ms</span></div>
+        <p style="color:var(--fg-3);font-size:0.85rem;margin:0.4rem 0 0;">A five-second stall on a 45 ms endpoint is the signature of a smuggled request waiting on a body that never arrives.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- AUTOMATION -->
+  <section class="section">
+    <div class="wrap split">
+      <div class="reveal">
+        <div class="section-head" style="margin-bottom:1.5rem;">
+          <h2>Built for pipelines and agents.</h2>
+          <p>Clean JSON on stdout, meaningful exit codes, and one batch envelope for every run. Drop smugglex into CI or an agent loop without scraping logs.</p>
+        </div>
+        <ul class="feat-list">
+          <li><svg class="ico"><use href="#i-code"/></svg><span><b>Pure JSON on stdout.</b> <span>With <code>--json</code>, only the document prints. Logs stay on stderr.</span></span></li>
+          <li><svg class="ico"><use href="#i-stack"/></svg><span><b>Batch envelope.</b> <span>A <code>results[]</code> array plus a summary, even for a single target.</span></span></li>
+          <li><svg class="ico"><use href="#i-branch"/></svg><span><b>Composable.</b> <span>Pipe URLs in from any recon tool, pipe findings out to jq.</span></span></li>
+        </ul>
+        <div class="exit-codes">
+          <div class="ec"><span class="k">0</span><span class="v">clean, no smuggling found</span></div>
+          <div class="ec"><span class="k">1</span><span class="v">at least one vulnerable check</span></div>
+          <div class="ec"><span class="k">2</span><span class="v">usage or input error</span></div>
+        </div>
+      </div>
+      <div class="code-card reveal" style="--d:.08s">
+        <div class="term-bar">
+          <svg class="ico"><use href="#i-code"/></svg>
+          <span class="title">report.json</span>
+        </div>
+        <pre>{
+  <span class="jk">"smugglex_version"</span>: <span class="js">"0.2.0"</span>,
+  <span class="jk">"results"</span>: [
+    {
+      <span class="jk">"target"</span>: <span class="js">"https://target.com"</span>,
+      <span class="jk">"checks"</span>: [ <span class="js">"..."</span> ]
+    }
+  ],
+  <span class="jk">"summary"</span>: {
+    <span class="jk">"total_targets"</span>: <span class="jn">12</span>,
+    <span class="jk">"vulnerable_targets"</span>: <span class="jn">3</span>,
+    <span class="jk">"total_checks"</span>: <span class="jn">84</span>,
+    <span class="jk">"vulnerable_checks"</span>: <span class="jn">5</span>
+  }
+}</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2>More than a checklist.</h2>
+        <p>Everything you need to go from a URL to a confirmed, reproducible desync.</p>
+      </div>
+      <div class="features">
+        <div class="feature-item reveal">
+          <span class="fi-ico"><svg class="ico"><use href="#i-bolt"/></svg></span>
+          <div><h3>Real HTTP/2</h3><p>Speaks ALPN <code>h2</code> on HTTPS targets to catch HTTP/2 to HTTP/1.1 downgrade smuggling.</p></div>
+        </div>
+        <div class="feature-item reveal" style="--d:.05s">
+          <span class="fi-ico"><svg class="ico"><use href="#i-replace"/></svg></span>
+          <div><h3>Burp raw-request replay</h3><p><code>--raw-request</code> replays a captured request verbatim, so path and matrix payloads survive.</p></div>
+        </div>
+        <div class="feature-item reveal">
+          <span class="fi-ico"><svg class="ico"><use href="#i-fingerprint"/></svg></span>
+          <div><h3>Fingerprint and fuzz</h3><p><code>--fingerprint</code> profiles proxies; <code>--fuzz</code> mutates payloads from a reproducible seed.</p></div>
+        </div>
+        <div class="feature-item reveal" style="--d:.05s">
+          <span class="fi-ico"><svg class="ico"><use href="#i-terminal"/></svg></span>
+          <div><h3>Exploitation modules</h3><p>Go past detection with localhost-access, path-fuzz, smuggle, capture and reveal.</p></div>
+        </div>
+        <div class="feature-item reveal">
+          <span class="fi-ico"><svg class="ico"><use href="#i-branch"/></svg></span>
+          <div><h3>stdin pipeline</h3><p>Pipe URLs from any recon tool, and use <code>--exit-first</code> for fast triage.</p></div>
+        </div>
+        <div class="feature-item reveal" style="--d:.05s">
+          <span class="fi-ico"><svg class="ico"><use href="#i-package"/></svg></span>
+          <div><h3>Single static binary</h3><p>Rust, no runtime. Install with Homebrew, Cargo, Nix, Snap, or a prebuilt release.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="cta reveal">
+        <div class="cta-bg tex-scale"></div>
+        <img class="mark" src="{{ base_url }}/images/logo-single.png" alt="">
+        <h2>Ship it before they <span class="venom">smuggle</span> it.</h2>
+        <p>smugglex is open source and MIT licensed. Point it at a target and find the desync first.</p>
+        <div class="cta-actions">
+          <a href="{{ base_url }}/usage/" class="btn btn-primary">Get started <svg class="ico"><use href="#i-arrow-right"/></svg></a>
+          <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener" class="btn btn-ghost"><svg class="ico"><use href="#i-github"/></svg> View on GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="{{ base_url }}/" class="brand">
+            <img src="{{ base_url }}/images/logo-single.png" alt="">
+            <span class="name">smuggle<b>x</b></span>
+          </a>
+          <p>Rust-powered HTTP Request Smuggling scanner for security researchers and red teams.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Docs</h4>
+          <a href="{{ base_url }}/usage/">Installation</a>
+          <a href="{{ base_url }}/usage/quick-start/">Quick Start</a>
+          <a href="{{ base_url }}/usage/options/">Options</a>
+          <a href="{{ base_url }}/usage/output/">Output</a>
+        </div>
+        <div class="footer-col">
+          <h4>Checks</h4>
+          <a href="{{ base_url }}/checks/">Overview</a>
+          <a href="{{ base_url }}/checks/cl-te/">CL.TE</a>
+          <a href="{{ base_url }}/checks/h2/">H2 downgrade</a>
+          <a href="{{ base_url }}/advanced/">Advanced</a>
+        </div>
+        <div class="footer-col">
+          <h4>Project</h4>
+          <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/hahwul/smugglex/releases" target="_blank" rel="noopener">Releases</a>
+          <a href="https://github.com/hahwul/smugglex/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+          <a href="https://www.hahwul.com" target="_blank" rel="noopener">hahwul.com</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>&copy; 2026 smugglex. MIT licensed.</span>
+        <a href="https://www.hahwul.com" target="_blank" rel="noopener" aria-label="hahwul.com"><img src="{{ base_url }}/images/hahwul.webp" class="hahwul-img" alt="hahwul.com"></a>
+      </div>
+    </div>
+  </footer>
+
+</main>
+
+<script src="{{ base_url }}/js/site.js"></script>
+</body>
+</html>
