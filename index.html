@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="smugglex is a fast, Rust-powered HTTP Request Smuggling scanner. Detect CL.TE, TE.CL, TE.TE, H2C, H2 downgrade and CL-Edge desync with timing-based detection.">
+  <meta name="theme-color" content="#08090b">
+  <title>smugglex - HTTP Request Smuggling Scanner</title>
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="smugglex - HTTP Request Smuggling Scanner">
+  <meta property="og:description" content="Fast, Rust-powered HTTP Request Smuggling scanner. Timing-based, protocol-aware desync detection for security researchers.">
+  <meta property="og:url" content="https://smugglex.hahwul.com/">
+  <meta property="og:image" content="https://smugglex.hahwul.com/images/preview.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="smugglex - HTTP Request Smuggling Scanner">
+  <meta name="twitter:description" content="Fast, Rust-powered HTTP Request Smuggling scanner. Timing-based, protocol-aware desync detection.">
+  <meta name="twitter:image" content="https://smugglex.hahwul.com/images/preview.jpg">
+  <link rel="preconnect" href="https://smugglex.hahwul.com">
+  <link rel="preload" as="font" type="font/woff2" href="https://smugglex.hahwul.com/fonts/space-grotesk-700.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="https://smugglex.hahwul.com/fonts/space-grotesk-400.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="https://smugglex.hahwul.com/fonts/jetbrains-mono-400.woff2" crossorigin>
+  <link rel="stylesheet" href="https://smugglex.hahwul.com/css/style.css">
+</head>
+<body data-page="home">
+<a class="skip-link" href="#main">Skip to content</a>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/><path d="M21 21l-6 -6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666"/><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5l10 -10"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12l14 0"/><path d="M13 18l6 -6"/><path d="M13 6l6 6"/></symbol>
+  <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M17 7l-10 10"/><path d="M8 7l9 0l0 9"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6l16 0"/><path d="M4 12l16 0"/><path d="M4 18l16 0"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6l-12 12"/><path d="M6 6l12 12"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M8 9l3 3l-3 3"/><path d="M13 15l3 0"/><path d="M3 6a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2l0 -12"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M11.46 20.846a12 12 0 0 1 -7.96 -14.846a12 12 0 0 0 8.5 -3a12 12 0 0 0 8.5 3a12 12 0 0 1 -.09 7.06"/><path d="M15 19l2 2l4 -4"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M7 8l-4 4l4 4"/><path d="M17 8l4 4l-4 4"/><path d="M14 4l-4 16"/></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24"><path d="M12 21l-8 -4.5v-9l8 -4.5l8 4.5v4.5"/><path d="M12 12l8 -4.5"/><path d="M12 12v9"/><path d="M12 12l-8 -4.5"/><path d="M22 18h-7"/><path d="M18 15l-3 3l3 3"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M13.41 10.59l2.59 -2.59"/><path d="M7 12a5 5 0 0 1 5 -5"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 4h16v2.172a2 2 0 0 1 -.586 1.414l-4.414 4.414v7l-6 2v-8.5l-4.48 -4.928a2 2 0 0 1 -.52 -1.345v-2.227"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M5 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M15 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M7 8l0 8"/><path d="M9 18h6a2 2 0 0 0 2 -2v-5"/><path d="M14 14l3 -3l3 3"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 6l6 6l-6 6"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6"/><path d="M11 13l9 -9"/><path d="M15 4h5v5"/></symbol>
+  <symbol id="i-crosshair" viewBox="0 0 24 24"><path d="M4 8v-2a2 2 0 0 1 2 -2h2"/><path d="M4 16v2a2 2 0 0 0 2 2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M16 20h2a2 2 0 0 0 2 -2v-2"/><path d="M9 12l6 0"/><path d="M12 9l0 6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0"/><path d="M12 7v5l3 3"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4.5l1.5 -6l4 12l2 -9l1.5 3h4.5"/></symbol>
+  <symbol id="i-replace" viewBox="0 0 24 24"><path d="M3 4a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4"/><path d="M15 16a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4"/><path d="M21 11v-3a2 2 0 0 0 -2 -2h-6l3 3m0 -6l-3 3"/><path d="M3 13v3a2 2 0 0 0 2 2h6l-3 -3m0 6l3 -3"/></symbol>
+  <symbol id="i-fingerprint" viewBox="0 0 24 24"><path d="M18.9 7a8 8 0 0 1 1.1 5v1a6 6 0 0 0 .8 3"/><path d="M8 11a4 4 0 0 1 8 0v1a10 10 0 0 0 2 6"/><path d="M12 11v2a14 14 0 0 0 2.5 8"/><path d="M8 15a18 18 0 0 0 1.8 6"/><path d="M4.9 19a22 22 0 0 1 -.9 -7v-1a8 8 0 0 1 12 -6.95"/></symbol>
+  <symbol id="i-stack" viewBox="0 0 24 24"><path d="M12 4l-8 4l8 4l8 -4l-8 -4"/><path d="M4 12l8 4l8 -4"/><path d="M4 16l8 4l8 -4"/></symbol>
+</defs></svg>
+
+<nav class="nav nav-landing">
+  <a href="https://smugglex.hahwul.com/" class="brand">
+    <img src="https://smugglex.hahwul.com/images/logo-single.png" alt="">
+    <span class="name">smuggle<b>x</b></span>
+  </a>
+  <div class="nav-links">
+    <a href="https://smugglex.hahwul.com/usage/">Docs</a>
+    <a href="https://smugglex.hahwul.com/checks/">Checks</a>
+    <a href="https://smugglex.hahwul.com/advanced/">Advanced</a>
+  </div>
+  <div class="nav-right">
+    <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener" aria-label="GitHub"><svg class="ico" style="font-size:1.25rem"><use href="#i-github"/></svg></a>
+    <a href="https://smugglex.hahwul.com/usage/" class="btn btn-sm">Get started</a>
+  </div>
+  <button class="nav-toggle" aria-label="Toggle menu" onclick="toggleNav()"><svg class="ico"><use href="#i-menu"/></svg></button>
+</nav>
+<div class="nav-scrim" onclick="closeNav()"></div>
+
+<main class="landing" id="main">
+
+  <!-- HERO -->
+  <header class="hero wrap">
+    <div class="hero-bg"></div>
+    <div class="hero-copy">
+      <span class="eyebrow reveal">HTTP desync scanner</span>
+      <h1 class="reveal" style="--d:.05s">Hunt HTTP request <span class="venom">smuggling.</span></h1>
+      <p class="lede reveal" style="--d:.12s">smugglex finds where front-end and back-end servers disagree on request boundaries. Timing-based, protocol-aware, and written in Rust.</p>
+      <div class="hero-cta reveal" style="--d:.18s">
+        <a href="https://smugglex.hahwul.com/usage/" class="btn btn-primary">Get started <svg class="ico"><use href="#i-arrow-right"/></svg></a>
+        <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener" class="btn btn-ghost"><svg class="ico"><use href="#i-github"/></svg> View on GitHub</a>
+      </div>
+    </div>
+    <div class="hero-art reveal" style="--d:.1s" aria-hidden="true">
+      <div class="ring"></div>
+      <img class="serpent" src="https://smugglex.hahwul.com/images/logo-single.png" alt="">
+    </div>
+  </header>
+
+  <!-- INSTALL + TERMINAL -->
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <h2>Scan in one command.</h2>
+        <p style="margin-left:auto;margin-right:auto;">One static binary. Point it at a target, or pipe in a list, and get structured findings back.</p>
+      </div>
+      <div class="reveal" style="--d:.06s">
+        <div class="install-bar">
+          <span class="prompt">$</span>
+          <code>brew install hahwul/smugglex/smugglex</code>
+          <button class="copy-btn" data-clip="brew install hahwul/smugglex/smugglex" onclick="copyClip(this)"><svg class="ico"><use href="#i-copy"/></svg> copy</button>
+        </div>
+        <p class="install-note">Also available via Cargo, Nix, Snap, and prebuilt binaries.</p>
+      </div>
+      <div class="term reveal" style="--d:.1s">
+        <div class="term-bar">
+          <svg class="ico"><use href="#i-terminal"/></svg>
+          <span class="title">smugglex</span>
+        </div>
+        <div class="term-body"><pre><span class="c-prompt">$</span> <span class="c-cmd">smugglex https://target.com</span>
+
+<span class="c-vuln">[VULNERABLE]</span> CL.TE - https://target.com <span class="c-dim">(payload #3)</span>
+  <span class="c-dim">Normal:</span> 200 <span class="c-num">(45ms)</span> <span class="c-dim">| Attack:</span> 200 <span class="c-num">(5023ms)</span>
+<span class="c-ok">[OK]</span> TE.CL - https://target.com
+<span class="c-ok">[OK]</span> TE.TE - https://target.com
+<span class="c-ok">[OK]</span> H2C - https://target.com
+<span class="c-vuln">[VULNERABLE]</span> H2 - https://target.com <span class="c-dim">(h2-downgrade)</span>
+<span class="c-ok">[OK]</span> CL-Edge - https://target.com
+
+<span class="c-dim"># 2 vulnerable checks &middot; exit code 1</span></pre></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CHECKS -->
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2>Six ways servers disagree.</h2>
+        <p>Each check targets one parser mismatch between the front-end and the back-end. Run the whole suite, or select with <code>-c</code>.</p>
+      </div>
+      <div class="checks-grid">
+        <a href="https://smugglex.hahwul.com/checks/cl-te/" class="check feature wide reveal">
+          <span class="tag">CL.TE</span>
+          <p>Content-Length says one thing, Transfer-Encoding says another. The classic desync, confirmed by timing.</p>
+          <div class="timing">
+            <div class="row"><span>baseline</span><span class="track"><span class="fill normal"></span></span><span class="val">45 ms</span></div>
+            <div class="row"><span>payload</span><span class="track"><span class="fill attack"></span></span><span class="val">5023 ms</span></div>
+          </div>
+          <span class="go">Read the technique <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="https://smugglex.hahwul.com/checks/h2/" class="check tex-scale reveal" style="--d:.05s">
+          <span class="tag">H2</span>
+          <p>HTTP/2 to HTTP/1.1 downgrade over real ALPN h2. Catches H2.CL and H2.TE.</p>
+          <span class="go">Read the technique <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="https://smugglex.hahwul.com/checks/te-cl/" class="check reveal">
+          <span class="tag">TE.CL</span>
+          <p>Transfer-Encoding vs Content-Length. The mirror image of CL.TE.</p>
+          <span class="go">Read <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="https://smugglex.hahwul.com/checks/te-te/" class="check reveal" style="--d:.05s">
+          <span class="tag">TE.TE</span>
+          <p>Transfer-Encoding obfuscation. Over 40 header variants are tried.</p>
+          <span class="go">Read <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="https://smugglex.hahwul.com/checks/h2c/" class="check reveal" style="--d:.1s">
+          <span class="tag">H2C</span>
+          <p>HTTP/2 cleartext upgrade smuggling against h2c-capable proxies.</p>
+          <span class="go">Read <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+        <a href="https://smugglex.hahwul.com/checks/cl-edge/" class="check full reveal">
+          <span class="tag">CL-Edge</span>
+          <p>Content-Length edge cases. Malformed, duplicated and whitespace-padded length headers that slip past a validator but split at the next hop.</p>
+          <span class="go">Read the technique <svg class="ico"><use href="#i-chevron-right"/></svg></span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2>Timing tells the truth.</h2>
+        <p>No guessing from response bodies. smugglex measures how long the back-end takes to answer, then compares against a clean baseline.</p>
+      </div>
+      <div class="steps">
+        <div class="step reveal">
+          <svg class="ico" style="font-size:1.5rem;color:var(--acid)"><use href="#i-clock"/></svg>
+          <h3>Measure the baseline</h3>
+          <p>It sends a few clean requests, three by default, and records how fast the server normally responds.</p>
+        </div>
+        <div class="step reveal" style="--d:.07s">
+          <svg class="ico" style="font-size:1.5rem;color:var(--acid)"><use href="#i-bolt"/></svg>
+          <h3>Send the payload</h3>
+          <p>Then it delivers desync payloads crafted for each technique against the same endpoint.</p>
+        </div>
+        <div class="step reveal" style="--d:.14s">
+          <svg class="ico" style="font-size:1.5rem;color:var(--acid)"><use href="#i-gauge"/></svg>
+          <h3>Compare the timing</h3>
+          <p>A reply that stalls past three times baseline, or a full second longer, means the parsers disagreed.</p>
+        </div>
+      </div>
+      <div class="how-viz reveal" style="--d:.1s">
+        <div class="vrow"><span class="vlabel">clean baseline</span><span class="vtrack"><span class="vfill a"></span></span><span class="vval">45 ms</span></div>
+        <div class="vrow"><span class="vlabel">CL.TE payload</span><span class="vtrack"><span class="vfill b"></span></span><span class="vval hit">5023 ms</span></div>
+        <p style="color:var(--fg-3);font-size:0.85rem;margin:0.4rem 0 0;">A five-second stall on a 45 ms endpoint is the signature of a smuggled request waiting on a body that never arrives.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- AUTOMATION -->
+  <section class="section">
+    <div class="wrap split">
+      <div class="reveal">
+        <div class="section-head" style="margin-bottom:1.5rem;">
+          <h2>Built for pipelines and agents.</h2>
+          <p>Clean JSON on stdout, meaningful exit codes, and one batch envelope for every run. Drop smugglex into CI or an agent loop without scraping logs.</p>
+        </div>
+        <ul class="feat-list">
+          <li><svg class="ico"><use href="#i-code"/></svg><span><b>Pure JSON on stdout.</b> <span>With <code>--json</code>, only the document prints. Logs stay on stderr.</span></span></li>
+          <li><svg class="ico"><use href="#i-stack"/></svg><span><b>Batch envelope.</b> <span>A <code>results[]</code> array plus a summary, even for a single target.</span></span></li>
+          <li><svg class="ico"><use href="#i-branch"/></svg><span><b>Composable.</b> <span>Pipe URLs in from any recon tool, pipe findings out to jq.</span></span></li>
+        </ul>
+        <div class="exit-codes">
+          <div class="ec"><span class="k">0</span><span class="v">clean, no smuggling found</span></div>
+          <div class="ec"><span class="k">1</span><span class="v">at least one vulnerable check</span></div>
+          <div class="ec"><span class="k">2</span><span class="v">usage or input error</span></div>
+        </div>
+      </div>
+      <div class="code-card reveal" style="--d:.08s">
+        <div class="term-bar">
+          <svg class="ico"><use href="#i-code"/></svg>
+          <span class="title">report.json</span>
+        </div>
+        <pre>{
+  <span class="jk">"smugglex_version"</span>: <span class="js">"0.2.0"</span>,
+  <span class="jk">"results"</span>: [
+    {
+      <span class="jk">"target"</span>: <span class="js">"https://target.com"</span>,
+      <span class="jk">"checks"</span>: [ <span class="js">"..."</span> ]
+    }
+  ],
+  <span class="jk">"summary"</span>: {
+    <span class="jk">"total_targets"</span>: <span class="jn">12</span>,
+    <span class="jk">"vulnerable_targets"</span>: <span class="jn">3</span>,
+    <span class="jk">"total_checks"</span>: <span class="jn">84</span>,
+    <span class="jk">"vulnerable_checks"</span>: <span class="jn">5</span>
+  }
+}</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <h2>More than a checklist.</h2>
+        <p>Everything you need to go from a URL to a confirmed, reproducible desync.</p>
+      </div>
+      <div class="features">
+        <div class="feature-item reveal">
+          <span class="fi-ico"><svg class="ico"><use href="#i-bolt"/></svg></span>
+          <div><h3>Real HTTP/2</h3><p>Speaks ALPN <code>h2</code> on HTTPS targets to catch HTTP/2 to HTTP/1.1 downgrade smuggling.</p></div>
+        </div>
+        <div class="feature-item reveal" style="--d:.05s">
+          <span class="fi-ico"><svg class="ico"><use href="#i-replace"/></svg></span>
+          <div><h3>Burp raw-request replay</h3><p><code>--raw-request</code> replays a captured request verbatim, so path and matrix payloads survive.</p></div>
+        </div>
+        <div class="feature-item reveal">
+          <span class="fi-ico"><svg class="ico"><use href="#i-fingerprint"/></svg></span>
+          <div><h3>Fingerprint and fuzz</h3><p><code>--fingerprint</code> profiles proxies; <code>--fuzz</code> mutates payloads from a reproducible seed.</p></div>
+        </div>
+        <div class="feature-item reveal" style="--d:.05s">
+          <span class="fi-ico"><svg class="ico"><use href="#i-terminal"/></svg></span>
+          <div><h3>Exploitation modules</h3><p>Go past detection with localhost-access, path-fuzz, smuggle, capture and reveal.</p></div>
+        </div>
+        <div class="feature-item reveal">
+          <span class="fi-ico"><svg class="ico"><use href="#i-branch"/></svg></span>
+          <div><h3>stdin pipeline</h3><p>Pipe URLs from any recon tool, and use <code>--exit-first</code> for fast triage.</p></div>
+        </div>
+        <div class="feature-item reveal" style="--d:.05s">
+          <span class="fi-ico"><svg class="ico"><use href="#i-package"/></svg></span>
+          <div><h3>Single static binary</h3><p>Rust, no runtime. Install with Homebrew, Cargo, Nix, Snap, or a prebuilt release.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section-tight">
+    <div class="wrap">
+      <div class="cta reveal">
+        <div class="cta-bg tex-scale"></div>
+        <img class="mark" src="https://smugglex.hahwul.com/images/logo-single.png" alt="">
+        <h2>Ship it before they <span class="venom">smuggle</span> it.</h2>
+        <p>smugglex is open source and MIT licensed. Point it at a target and find the desync first.</p>
+        <div class="cta-actions">
+          <a href="https://smugglex.hahwul.com/usage/" class="btn btn-primary">Get started <svg class="ico"><use href="#i-arrow-right"/></svg></a>
+          <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener" class="btn btn-ghost"><svg class="ico"><use href="#i-github"/></svg> View on GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="https://smugglex.hahwul.com/" class="brand">
+            <img src="https://smugglex.hahwul.com/images/logo-single.png" alt="">
+            <span class="name">smuggle<b>x</b></span>
+          </a>
+          <p>Rust-powered HTTP Request Smuggling scanner for security researchers and red teams.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Docs</h4>
+          <a href="https://smugglex.hahwul.com/usage/">Installation</a>
+          <a href="https://smugglex.hahwul.com/usage/quick-start/">Quick Start</a>
+          <a href="https://smugglex.hahwul.com/usage/options/">Options</a>
+          <a href="https://smugglex.hahwul.com/usage/output/">Output</a>
+        </div>
+        <div class="footer-col">
+          <h4>Checks</h4>
+          <a href="https://smugglex.hahwul.com/checks/">Overview</a>
+          <a href="https://smugglex.hahwul.com/checks/cl-te/">CL.TE</a>
+          <a href="https://smugglex.hahwul.com/checks/h2/">H2 downgrade</a>
+          <a href="https://smugglex.hahwul.com/advanced/">Advanced</a>
+        </div>
+        <div class="footer-col">
+          <h4>Project</h4>
+          <a href="https://github.com/hahwul/smugglex" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/hahwul/smugglex/releases" target="_blank" rel="noopener">Releases</a>
+          <a href="https://github.com/hahwul/smugglex/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+          <a href="https://www.hahwul.com" target="_blank" rel="noopener">hahwul.com</a>
+        </div>
+      </div>
+      <div class="footer-mark">
+        <a href="https://www.hahwul.com" target="_blank" rel="noopener" aria-label="hahwul">
+          <span class="hahwul-img" role="img" aria-label="hahwul"></span>
+        </a>
+        <p class="footer-love">Built with Love</p>
+      </div>
+    </div>
+  </footer>
+
+</main>
+
+<script src="https://smugglex.hahwul.com/js/site.js"></script>
+</body>
+</html>

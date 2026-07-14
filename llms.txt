@@ -1,0 +1,30 @@
+# smugglex
+
+> HTTP Request Smuggling Scanner
+
+## Pages
+
+- [smugglex](https://smugglex.hahwul.com/): Fast, Rust-powered HTTP Request Smuggling scanner. Detect CL.TE, TE.CL, TE.TE, H2C, H2 downgrade and CL-Edge desync with timing-based detection.
+
+## Advanced
+
+- [Exploitation](https://smugglex.hahwul.com/advanced/exploitation/): Post-detection exploitation capabilities
+- [Fingerprinting](https://smugglex.hahwul.com/advanced/fingerprinting/): Proxy and server fingerprinting
+- [Fuzzing](https://smugglex.hahwul.com/advanced/fuzzing/): Mutation-based payload fuzzing
+- [Pipeline](https://smugglex.hahwul.com/advanced/pipeline/): Integrating smugglex with other tools
+
+## Checks
+
+- [CL-Edge](https://smugglex.hahwul.com/checks/cl-edge/): Content-Length edge case attacks
+- [CL.TE](https://smugglex.hahwul.com/checks/cl-te/): Content-Length vs Transfer-Encoding desynchronization
+- [H2](https://smugglex.hahwul.com/checks/h2/): HTTP/2 protocol smuggling
+- [H2C](https://smugglex.hahwul.com/checks/h2c/): HTTP/2 Cleartext smuggling
+- [TE.CL](https://smugglex.hahwul.com/checks/te-cl/): Transfer-Encoding vs Content-Length desynchronization
+- [TE.TE](https://smugglex.hahwul.com/checks/te-te/): Transfer-Encoding obfuscation attacks
+
+## Installation
+
+- [Options](https://smugglex.hahwul.com/usage/options/): All CLI options for smugglex
+- [Output](https://smugglex.hahwul.com/usage/output/): Understanding smugglex output formats
+- [Quick Start](https://smugglex.hahwul.com/usage/quick-start/): Run your first smugglex scan
+
