@@ -464,8 +464,23 @@ img { max-width: 100%; display: block; }
   display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
   color: var(--fg-3); font-size: 0.82rem;
 }
-.footer-bottom .hahwul-img { height: 22px; opacity: 0.45; transition: opacity .2s var(--ease); }
-.footer-bottom .hahwul-img:hover { opacity: 0.8; }
+/* hahwul mark — Built with Love (matches dalfox docs footer) */
+.footer-mark { text-align: center; margin-top: 2.5rem; }
+.footer-mark a { display: inline-block; line-height: 0; }
+.footer-mark .hahwul-img {
+  display: inline-block; width: 80px; height: 80px;
+  /* Recolor the logo to the footer text tone by masking with its alpha. */
+  background-color: var(--fg-3);
+  -webkit-mask: url("../images/hahwul.webp") center / contain no-repeat;
+  mask: url("../images/hahwul.webp") center / contain no-repeat;
+  transition: background-color 0.3s var(--ease);
+}
+.footer-mark .hahwul-img:hover { background-color: var(--fg); }
+.footer-love {
+  margin-top: 0.85rem; color: var(--fg-3);
+  font-family: "Bradley Hand", "Snell Roundhand", "Apple Chancery", cursive;
+  font-size: 0.95rem; letter-spacing: 0.02em;
+}
 
 /* ============================================================
    DOCS
@@ -621,11 +636,8 @@ nav.pagination a:hover { color: var(--acid); border-color: var(--acid); text-dec
 /* docs footer */
 .docs-footer { margin-top: 3.5rem; padding-top: 1.75rem; border-top: 1px solid var(--line);
   color: var(--fg-3); font-size: 0.82rem; }
-.docs-footer .df-top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .docs-footer a { color: var(--fg-2); }
 .docs-footer a:hover { color: var(--acid); }
-.docs-footer .hahwul-img { height: 22px; opacity: 0.4; transition: opacity .2s var(--ease); vertical-align: middle; }
-.docs-footer .hahwul-img:hover { opacity: 0.75; }
 
 /* ============================================================
    SEARCH (kept functional, restyled)
