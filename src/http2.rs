@@ -752,7 +752,11 @@ mod tests {
         match scan_frames(&acc) {
             FrameScan::Outcome { outcome, .. } => {
                 assert!(outcome.responded);
-                assert_eq!(outcome.status, Some(404), "status read past priority fields");
+                assert_eq!(
+                    outcome.status,
+                    Some(404),
+                    "status read past priority fields"
+                );
             }
             _ => panic!("expected a terminal HEADERS outcome"),
         }

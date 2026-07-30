@@ -256,7 +256,10 @@ async fn get_stream_direct(
 /// accepted failures whose reason phrase happened to contain "200" (e.g.
 /// `HTTP/1.1 502 upstream 20000ms`) and rejected valid non-200 2xx replies.
 fn connect_reply_ok(status_line: &str) -> bool {
-    matches!(crate::utils::parse_status_code(status_line), Some(200..=299))
+    matches!(
+        crate::utils::parse_status_code(status_line),
+        Some(200..=299)
+    )
 }
 
 /// Creates a stream through an HTTP proxy using CONNECT tunnel.
@@ -765,8 +768,12 @@ kJ8CRz+khnaPy0Io4PLR\n\
         // A 2xx other than 200 still establishes the tunnel.
         assert!(connect_reply_ok("HTTP/1.1 204 No Content\r\n"));
         // Failures must be rejected even when the reason phrase contains "200".
-        assert!(!connect_reply_ok("HTTP/1.1 502 upstream 20000ms timeout\r\n"));
-        assert!(!connect_reply_ok("HTTP/1.1 407 Proxy Authentication Required\r\n"));
+        assert!(!connect_reply_ok(
+            "HTTP/1.1 502 upstream 20000ms timeout\r\n"
+        ));
+        assert!(!connect_reply_ok(
+            "HTTP/1.1 407 Proxy Authentication Required\r\n"
+        ));
         assert!(!connect_reply_ok("garbage\r\n"));
     }
 

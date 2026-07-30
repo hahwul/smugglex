@@ -248,8 +248,7 @@ async fn main() -> Result<()> {
             let write_result = match scan_results.as_slice() {
                 [single] => save_scan_results_to_file(single, output_file),
                 _ => {
-                    let batch =
-                        build_batch_results(scan_results, Some(env!("CARGO_PKG_VERSION")));
+                    let batch = build_batch_results(scan_results, Some(env!("CARGO_PKG_VERSION")));
                     save_batch_to_file(&batch, output_file)
                 }
             };
