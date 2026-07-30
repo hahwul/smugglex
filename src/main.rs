@@ -111,6 +111,16 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Validate --proxy up front so an unsupported scheme (e.g. socks5) or a
+    // malformed URL fails immediately with a clear message, rather than failing
+    // per target once scanning starts.
+    if let Some(ref proxy) = cli.proxy
+        && let Err(e) = http::validate_proxy_url(proxy)
+    {
+        emit_input_error(&cli, &e.to_string());
+        std::process::exit(2);
+    }
+
     let urls = match resolve_urls(&mut cli) {
         Ok(urls) => urls,
         Err(e) => {

@@ -215,6 +215,31 @@ fn get_proxy() -> Option<&'static str> {
     PROXY.get().map(|s| s.as_str())
 }
 
+/// Validate a `--proxy` URL up front: it must parse, carry a host, and use a
+/// scheme smugglex can actually tunnel through. Only HTTP proxies (an `http://`
+/// or `https://` CONNECT proxy) are implemented; a `socks5://` URL would
+/// otherwise be silently accepted and then have an HTTP CONNECT sent to a SOCKS
+/// port, hanging or failing per target. Rejecting it here fails fast with a
+/// clear message instead.
+pub fn validate_proxy_url(proxy_url: &str) -> Result<()> {
+    let url = Url::parse(proxy_url).map_err(|e| {
+        SmugglexError::InvalidInput(format!("invalid proxy URL '{proxy_url}': {e}"))
+    })?;
+    match url.scheme() {
+        "http" | "https" => {
+            if url.host_str().is_none_or(str::is_empty) {
+                return Err(SmugglexError::InvalidInput(format!(
+                    "proxy URL '{proxy_url}' has no host"
+                )));
+            }
+            Ok(())
+        }
+        other => Err(SmugglexError::InvalidInput(format!(
+            "unsupported proxy scheme '{other}' in '{proxy_url}'; only HTTP proxies (http:// or https://) are supported — SOCKS is not implemented"
+        ))),
+    }
+}
+
 /// A trait that combines AsyncRead and AsyncWrite.
 trait ReadWrite: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite> ReadWrite for T {}
@@ -271,6 +296,15 @@ async fn get_stream_via_proxy(
 ) -> Result<Box<dyn ReadWrite + Unpin + Send>> {
     let proxy = Url::parse(proxy_url)
         .map_err(|e| SmugglexError::Io(format!("invalid proxy URL: {}", e)))?;
+    // Only HTTP CONNECT proxies are implemented; guard here too so a library
+    // caller that set the proxy directly can't tunnel through an unsupported
+    // scheme (e.g. socks5) and get a confusing connection failure.
+    if !matches!(proxy.scheme(), "http" | "https") {
+        return Err(SmugglexError::InvalidInput(format!(
+            "unsupported proxy scheme '{}'; only HTTP proxies are supported (SOCKS is not implemented)",
+            proxy.scheme()
+        )));
+    }
     let proxy_host = proxy
         .host_str()
         .ok_or_else(|| SmugglexError::Io("proxy URL has no host".to_string()))?;
@@ -759,6 +793,30 @@ kJ8CRz+khnaPy0Io4PLR\n\
             vec![b"h2".to_vec()],
             "default h2 config advertises ALPN h2"
         );
+    }
+
+    #[test]
+    fn validate_proxy_url_accepts_http_rejects_socks() {
+        assert!(validate_proxy_url("http://127.0.0.1:8080").is_ok());
+        assert!(validate_proxy_url("https://proxy.example:3128").is_ok());
+        // SOCKS is not implemented — must be rejected, not silently misused.
+        assert!(matches!(
+            validate_proxy_url("socks5://127.0.0.1:1080"),
+            Err(SmugglexError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            validate_proxy_url("socks4://127.0.0.1:1080"),
+            Err(SmugglexError::InvalidInput(_))
+        ));
+        // Malformed URL and missing host are rejected too.
+        assert!(matches!(
+            validate_proxy_url("not a url"),
+            Err(SmugglexError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            validate_proxy_url("http://"),
+            Err(SmugglexError::InvalidInput(_))
+        ));
     }
 
     #[test]
