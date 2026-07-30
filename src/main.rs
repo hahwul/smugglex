@@ -219,8 +219,11 @@ async fn main() -> Result<()> {
         })
         .collect();
 
-    // Emit results
+    // Emit results. Track whether writing the -o file failed so a silent write
+    // error (disk full, unwritable path) is surfaced in the exit code rather
+    // than leaving a scripted caller believing the report was saved.
     let json_mode = cli.effective_format().is_json();
+    let mut output_write_failed = false;
     if json_mode {
         let batch = build_batch_results(scan_results, Some(env!("CARGO_PKG_VERSION")));
         print_batch_json(&batch);
@@ -228,6 +231,7 @@ async fn main() -> Result<()> {
         if let Some(ref output_file) = cli.output
             && let Err(e) = save_batch_to_file(&batch, output_file)
         {
+            output_write_failed = true;
             log(
                 LogLevel::Error,
                 &format!("failed to write batch output file: {}", e),
@@ -250,6 +254,7 @@ async fn main() -> Result<()> {
                 }
             };
             if let Err(e) = write_result {
+                output_write_failed = true;
                 log(
                     LogLevel::Error,
                     &format!("failed to write output file: {}", e),
@@ -261,11 +266,14 @@ async fn main() -> Result<()> {
     // Final timing is intentionally omitted in machine mode to keep stdout pure.
     // In plain mode the per-target "scan completed in" messages were already emitted by the old path.
 
+    // A confirmed vulnerability is the primary signal, so it keeps priority for
+    // the exit code. Otherwise a target-level failure or a failed -o write is an
+    // operational problem → exit 2.
     if any_vulnerable {
         std::process::exit(1);
     }
 
-    if any_failures {
+    if any_failures || output_write_failed {
         std::process::exit(2);
     }
 
