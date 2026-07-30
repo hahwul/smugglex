@@ -73,6 +73,17 @@ impl ScanOutcome {
     }
 }
 
+/// Whether an outcome should drive a non-zero (failure) exit code: a hard
+/// `Failure` (URL/host error, worker panic) or a `Success` whose `ScanResults`
+/// carries an `error` (e.g. an unreachable target where every check failed to
+/// connect). Both let a scripted batch tell "down/errored" from "clean".
+fn outcome_is_failure(o: &ScanOutcome) -> bool {
+    match o {
+        ScanOutcome::Failure { .. } => true,
+        ScanOutcome::Success { scan_results, .. } => scan_results.error.is_some(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut cli = Cli::parse();
@@ -198,9 +209,7 @@ async fn main() -> Result<()> {
 
     // Compute overall vulnerability status for exit code
     let any_vulnerable = outcomes.iter().any(|o| o.is_vulnerable());
-    let any_failures = outcomes
-        .iter()
-        .any(|o| matches!(o, ScanOutcome::Failure { .. }));
+    let any_failures = outcomes.iter().any(outcome_is_failure);
 
     // Convert outcomes to ScanResults (synthesize a minimal entry for failures
     // so every requested target appears in the output).
@@ -574,6 +583,11 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
 
     let mut results = Vec::new();
     let mut found_vulnerability = false;
+    // Whether at least one check actually reached the target (established a
+    // baseline / got an HTTP/2 response). If every check failed to connect, the
+    // target is unreachable — a distinct outcome from a genuinely clean scan,
+    // which we must not silently report as "0 vulnerabilities" with exit 0.
+    let mut any_check_reachable = false;
 
     // The real-HTTP/2 downgrade check (H2.CL / H2.TE) speaks ALPN h2, so it only
     // applies to https targets. It is not a payload-string check, so it lives
@@ -638,6 +652,9 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
 
         match run_checks_for_type(params).await {
             Ok(result) => {
+                // A returned result means the baseline was measured, so the
+                // target answered at least one request.
+                any_check_reachable = true;
                 found_vulnerability |= result.vulnerable;
                 results.push(result);
                 pb.inc(1);
@@ -689,8 +706,28 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         )
         .await;
         found_vulnerability |= result.vulnerable;
+        // The h2 check flags a failed handshake with this diagnostic; anything
+        // else means we spoke HTTP/2 to the target, i.e. it was reachable.
+        if !result
+            .diagnostics
+            .iter()
+            .any(|d| d == "h2_baseline_no_response")
+        {
+            any_check_reachable = true;
+        }
         results.push(result);
         pb.inc(1);
+    }
+
+    // If checks were attempted but none reached the target, it is unreachable
+    // (host down, connection refused, TLS failure) rather than clean. Record it
+    // so the scan is not misreported as a clean exit-0 result.
+    let target_unreachable = total_checks > 0 && !any_check_reachable;
+    if target_unreachable && !is_machine() {
+        log(
+            LogLevel::Warning,
+            &format!("{display_target} appears unreachable: every check failed to connect"),
+        );
     }
 
     if !cli.verbose && !is_machine() {
@@ -765,14 +802,18 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         );
     }
 
-    // Build the structured result for the outcome (always produced, used for JSON batch or exit code)
+    // Build the structured result for the outcome (always produced, used for JSON batch or exit code).
+    // An unreachable target carries an `error` so it is distinguishable from a
+    // clean scan in both the JSON output and the process exit code, while still
+    // preserving the per-check CHECK_FAILED diagnostics in `checks`.
     let scan_results = ScanResults {
         target: display_target.to_string(),
         method: cli.method.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         fingerprint: fingerprint_info,
         checks: results,
-        error: None,
+        error: target_unreachable
+            .then(|| "target unreachable: every check failed to connect".to_string()),
     };
 
     ScanOutcome::Success {
@@ -1057,6 +1098,41 @@ mod tests {
                 "http://c.example".to_string(),
             ]
         );
+    }
+
+    fn scan_results_with_error(error: Option<&str>) -> ScanResults {
+        ScanResults {
+            target: "http://x".to_string(),
+            method: "POST".to_string(),
+            timestamp: "t".to_string(),
+            fingerprint: None,
+            checks: Vec::new(),
+            error: error.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn outcome_is_failure_classifies_unreachable_success_and_hard_failure() {
+        // Hard failure → failure.
+        assert!(outcome_is_failure(&ScanOutcome::Failure {
+            target: "http://x".to_string(),
+            error: "URL parse error".to_string(),
+        }));
+        // Success carrying an error (unreachable target) → failure (exit 2).
+        assert!(outcome_is_failure(&ScanOutcome::Success {
+            scan_results: scan_results_with_error(Some("target unreachable")),
+            found_vulnerability: false,
+        }));
+        // Clean success → not a failure (exit 0).
+        assert!(!outcome_is_failure(&ScanOutcome::Success {
+            scan_results: scan_results_with_error(None),
+            found_vulnerability: false,
+        }));
+        // Vulnerable success → not counted as a failure (exit 1 takes priority).
+        assert!(!outcome_is_failure(&ScanOutcome::Success {
+            scan_results: scan_results_with_error(None),
+            found_vulnerability: true,
+        }));
     }
 
     #[test]
