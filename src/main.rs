@@ -50,10 +50,8 @@ struct ExploitParams<'a> {
 /// Outcome of scanning a single target. Used to collect results for batch JSON output
 /// and to determine the final exit code (0 = clean, 1 = vulnerable found).
 #[derive(Debug)]
-#[allow(dead_code)]
 enum ScanOutcome {
     Success {
-        target: String,
         scan_results: ScanResults,
         found_vulnerability: bool,
     },
@@ -63,15 +61,7 @@ enum ScanOutcome {
     },
 }
 
-#[allow(dead_code)]
 impl ScanOutcome {
-    fn target(&self) -> &str {
-        match self {
-            ScanOutcome::Success { target, .. } => target,
-            ScanOutcome::Failure { target, .. } => target,
-        }
-    }
-
     fn is_vulnerable(&self) -> bool {
         matches!(
             self,
@@ -109,6 +99,16 @@ async fn main() -> Result<()> {
     if cli.version {
         println!("smugglex {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+
+    // Validate --proxy up front so an unsupported scheme (e.g. socks5) or a
+    // malformed URL fails immediately with a clear message, rather than failing
+    // per target once scanning starts.
+    if let Some(ref proxy) = cli.proxy
+        && let Err(e) = http::validate_proxy_url(proxy)
+    {
+        emit_input_error(&cli, &e.to_string());
+        std::process::exit(2);
     }
 
     let urls = match resolve_urls(&mut cli) {
@@ -776,7 +776,6 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     };
 
     ScanOutcome::Success {
-        target: display_target.to_string(),
         scan_results,
         found_vulnerability,
     }

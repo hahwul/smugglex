@@ -242,7 +242,7 @@ pub struct Cli {
     )]
     pub concurrency: usize,
 
-    /// HTTP/SOCKS proxy URL (e.g., http://127.0.0.1:8080)
+    /// HTTP proxy URL for CONNECT tunneling (e.g., http://127.0.0.1:8080). SOCKS is not supported.
     #[arg(help_heading = "REQUEST", short = 'x', long = "proxy")]
     pub proxy: Option<String>,
 
