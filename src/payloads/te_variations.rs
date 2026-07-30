@@ -165,5 +165,40 @@ pub fn get_te_header_variations() -> Vec<String> {
         ));
     }
 
+    // Drop byte-identical duplicates while preserving order. Several explicit
+    // entries above are re-emitted by the control-character loops (e.g. the null
+    // suffix, tab suffix, and single-byte prefixes/suffixes), so without this
+    // each duplicated variation would be sent twice per CL.TE / TE.CL check —
+    // wasted, identical requests that add nothing.
+    let mut seen = std::collections::HashSet::with_capacity(te_headers.len());
+    te_headers.retain(|h| seen.insert(h.clone()));
+
     te_headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_te_header_variations;
+    use std::collections::HashSet;
+
+    #[test]
+    fn variations_have_no_byte_identical_duplicates() {
+        // The control-character loops used to re-emit several explicit entries
+        // (e.g. `Transfer-Encoding: chunked\0`), so each was smuggled twice per
+        // check. After dedup, every variation must be unique.
+        let vars = get_te_header_variations();
+        let unique: HashSet<&String> = vars.iter().collect();
+        assert_eq!(
+            vars.len(),
+            unique.len(),
+            "get_te_header_variations must not contain byte-identical duplicates"
+        );
+        // The plain vanilla header must still be present exactly once.
+        assert_eq!(
+            vars.iter()
+                .filter(|h| h.as_str() == "Transfer-Encoding: chunked")
+                .count(),
+            1
+        );
+    }
 }

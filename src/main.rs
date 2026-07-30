@@ -73,6 +73,71 @@ impl ScanOutcome {
     }
 }
 
+/// Whether an outcome should drive a non-zero (failure) exit code: a hard
+/// `Failure` (URL/host error, worker panic) or a `Success` whose `ScanResults`
+/// carries an `error` (e.g. an unreachable target where every check failed to
+/// connect). Both let a scripted batch tell "down/errored" from "clean".
+fn outcome_is_failure(o: &ScanOutcome) -> bool {
+    match o {
+        ScanOutcome::Failure { .. } => true,
+        ScanOutcome::Success { scan_results, .. } => scan_results.error.is_some(),
+    }
+}
+
+/// Parse a comma-separated `--exploit-ports` list into `(valid ports, invalid
+/// tokens)`. Empty/whitespace-only segments are ignored; any token that is not a
+/// valid `u16` is returned as invalid so the caller can warn rather than silently
+/// drop it.
+fn parse_exploit_ports(ports_str: &str) -> (Vec<u16>, Vec<String>) {
+    let mut valid = Vec::new();
+    let mut invalid = Vec::new();
+    for tok in ports_str
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        match tok.parse::<u16>() {
+            Ok(p) => valid.push(p),
+            Err(_) => invalid.push(tok.to_string()),
+        }
+    }
+    (valid, invalid)
+}
+
+/// What to do with a requested `--exploit` list, given the scan state.
+#[derive(Debug, PartialEq, Eq)]
+enum ExploitAction {
+    /// Run the exploit phase (plain mode, and either a detection or a
+    /// direct-firing exploit like smuggle/capture/reveal).
+    Run,
+    /// Skip because output is JSON/machine mode (exploit output is human-oriented).
+    SkipMachineMode,
+    /// Skip because nothing was detected and no direct-firing exploit was asked for.
+    SkipNoDetection,
+}
+
+/// Decide the exploit action. Extracted so every case is covered and testable —
+/// in particular a direct exploit (`reveal`/`smuggle`/`capture`) requested in
+/// JSON mode used to fall through *all* branches and be dropped with no message.
+fn decide_exploit_action(
+    exploit_str: &str,
+    found_vulnerability: bool,
+    machine: bool,
+) -> ExploitAction {
+    if machine {
+        // Exploit output never goes to the JSON stream; always tell the user.
+        return ExploitAction::SkipMachineMode;
+    }
+    let direct = exploit_str
+        .split(',')
+        .any(|x| matches!(x.trim(), "smuggle" | "capture" | "reveal"));
+    if found_vulnerability || direct {
+        ExploitAction::Run
+    } else {
+        ExploitAction::SkipNoDetection
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut cli = Cli::parse();
@@ -198,9 +263,7 @@ async fn main() -> Result<()> {
 
     // Compute overall vulnerability status for exit code
     let any_vulnerable = outcomes.iter().any(|o| o.is_vulnerable());
-    let any_failures = outcomes
-        .iter()
-        .any(|o| matches!(o, ScanOutcome::Failure { .. }));
+    let any_failures = outcomes.iter().any(outcome_is_failure);
 
     // Convert outcomes to ScanResults (synthesize a minimal entry for failures
     // so every requested target appears in the output).
@@ -574,6 +637,11 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
 
     let mut results = Vec::new();
     let mut found_vulnerability = false;
+    // Whether at least one check actually reached the target (established a
+    // baseline / got an HTTP/2 response). If every check failed to connect, the
+    // target is unreachable — a distinct outcome from a genuinely clean scan,
+    // which we must not silently report as "0 vulnerabilities" with exit 0.
+    let mut any_check_reachable = false;
 
     // The real-HTTP/2 downgrade check (H2.CL / H2.TE) speaks ALPN h2, so it only
     // applies to https targets. It is not a payload-string check, so it lives
@@ -638,6 +706,9 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
 
         match run_checks_for_type(params).await {
             Ok(result) => {
+                // A returned result means the baseline was measured, so the
+                // target answered at least one request.
+                any_check_reachable = true;
                 found_vulnerability |= result.vulnerable;
                 results.push(result);
                 pb.inc(1);
@@ -689,8 +760,28 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         )
         .await;
         found_vulnerability |= result.vulnerable;
+        // The h2 check flags a failed handshake with this diagnostic; anything
+        // else means we spoke HTTP/2 to the target, i.e. it was reachable.
+        if !result
+            .diagnostics
+            .iter()
+            .any(|d| d == "h2_baseline_no_response")
+        {
+            any_check_reachable = true;
+        }
         results.push(result);
         pb.inc(1);
+    }
+
+    // If checks were attempted but none reached the target, it is unreachable
+    // (host down, connection refused, TLS failure) rather than clean. Record it
+    // so the scan is not misreported as a clean exit-0 result.
+    let target_unreachable = total_checks > 0 && !any_check_reachable;
+    if target_unreachable && !is_machine() {
+        log(
+            LogLevel::Warning,
+            &format!("{display_target} appears unreachable: every check failed to connect"),
+        );
     }
 
     if !cli.verbose && !is_machine() {
@@ -713,42 +804,39 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     // to keep stdout clean and because exploit details are better consumed interactively.
     if let Some(ref exploit_str) = cli.exploit {
         // The `smuggle`/`capture`/`reveal` exploits fire their payload directly
-        // and do not depend on a prior detection, so allow them to run even when
-        // the scan was quiet.
-        let direct_exploit = exploit_str
-            .split(',')
-            .any(|x| matches!(x.trim(), "smuggle" | "capture" | "reveal"));
-        if (found_vulnerability || direct_exploit) && !is_machine() {
-            let exploit_params = ExploitParams {
-                exploit_str,
-                results: &results,
-                host,
-                port,
-                path,
-                use_tls,
-                timeout: cli.timeout,
-                verbose: cli.verbose,
-                target_url: display_target,
-                ports_str: &cli.exploit_ports,
-                wordlist_path: cli.exploit_wordlist.as_deref(),
-                delay: cli.delay,
-                smuggle_request: cli.smuggle_request.as_deref(),
-                reveal_endpoint: cli.reveal_endpoint.as_deref(),
-                reveal_param: &cli.reveal_param,
-            };
-            if let Err(e) = run_exploits(&exploit_params).await {
-                log(LogLevel::Error, &format!("exploit phase failed: {}", e));
+        // and do not depend on a prior detection, so they may run even when the
+        // scan was quiet. Every case is classified so none is silently dropped.
+        match decide_exploit_action(exploit_str, found_vulnerability, is_machine()) {
+            ExploitAction::Run => {
+                let exploit_params = ExploitParams {
+                    exploit_str,
+                    results: &results,
+                    host,
+                    port,
+                    path,
+                    use_tls,
+                    timeout: cli.timeout,
+                    verbose: cli.verbose,
+                    target_url: display_target,
+                    ports_str: &cli.exploit_ports,
+                    wordlist_path: cli.exploit_wordlist.as_deref(),
+                    delay: cli.delay,
+                    smuggle_request: cli.smuggle_request.as_deref(),
+                    reveal_endpoint: cli.reveal_endpoint.as_deref(),
+                    reveal_param: &cli.reveal_param,
+                };
+                if let Err(e) = run_exploits(&exploit_params).await {
+                    log(LogLevel::Error, &format!("exploit phase failed: {}", e));
+                }
             }
-        } else if found_vulnerability && is_machine() {
-            log(
+            ExploitAction::SkipMachineMode => log(
                 LogLevel::Warning,
                 "exploit requested in JSON mode; skipping (re-run without --json/-f json for exploit output)",
-            );
-        } else if !is_machine() {
-            log(
+            ),
+            ExploitAction::SkipNoDetection => log(
                 LogLevel::Warning,
                 "exploit requested but no vulnerabilities found to exploit",
-            );
+            ),
         }
     }
 
@@ -765,14 +853,18 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         );
     }
 
-    // Build the structured result for the outcome (always produced, used for JSON batch or exit code)
+    // Build the structured result for the outcome (always produced, used for JSON batch or exit code).
+    // An unreachable target carries an `error` so it is distinguishable from a
+    // clean scan in both the JSON output and the process exit code, while still
+    // preserving the per-check CHECK_FAILED diagnostics in `checks`.
     let scan_results = ScanResults {
         target: display_target.to_string(),
         method: cli.method.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         fingerprint: fingerprint_info,
         checks: results,
-        error: None,
+        error: target_unreachable
+            .then(|| "target unreachable: every check failed to connect".to_string()),
     };
 
     ScanOutcome::Success {
@@ -831,12 +923,18 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     None => continue,
                 };
 
-                // Parse target ports
-                let localhost_ports: Vec<u16> = params
-                    .ports_str
-                    .split(',')
-                    .filter_map(|s| s.trim().parse::<u16>().ok())
-                    .collect();
+                // Parse target ports, surfacing any invalid tokens instead of
+                // silently dropping them (e.g. a typo'd `--exploit-ports 22,htt,80`).
+                let (localhost_ports, invalid_ports) = parse_exploit_ports(params.ports_str);
+                if !invalid_ports.is_empty() {
+                    log(
+                        LogLevel::Warning,
+                        &format!(
+                            "ignoring invalid --exploit-ports token(s): {} (must be 0-65535)",
+                            invalid_ports.join(", ")
+                        ),
+                    );
+                }
 
                 if localhost_ports.is_empty() {
                     log(
@@ -1057,6 +1155,77 @@ mod tests {
                 "http://c.example".to_string(),
             ]
         );
+    }
+
+    fn scan_results_with_error(error: Option<&str>) -> ScanResults {
+        ScanResults {
+            target: "http://x".to_string(),
+            method: "POST".to_string(),
+            timestamp: "t".to_string(),
+            fingerprint: None,
+            checks: Vec::new(),
+            error: error.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn parse_exploit_ports_separates_valid_and_invalid() {
+        let (valid, invalid) = parse_exploit_ports("22, 80 ,http,443,99999,,8080");
+        assert_eq!(valid, vec![22, 80, 443, 8080]);
+        // "http" is non-numeric; "99999" overflows u16 — both reported, not dropped.
+        assert_eq!(invalid, vec!["http".to_string(), "99999".to_string()]);
+        // All-valid input yields no invalid tokens.
+        assert_eq!(parse_exploit_ports("22,443").1, Vec::<String>::new());
+        // Empty/whitespace input yields nothing at all.
+        assert_eq!(parse_exploit_ports("  , ,").0, Vec::<u16>::new());
+    }
+
+    #[test]
+    fn decide_exploit_action_covers_every_case() {
+        use ExploitAction::*;
+        // Plain mode: a detection runs the phase; a direct exploit runs even
+        // without one; otherwise it's a no-detection skip.
+        assert_eq!(decide_exploit_action("localhost-access", true, false), Run);
+        assert_eq!(decide_exploit_action("reveal", false, false), Run);
+        assert_eq!(decide_exploit_action("smuggle,capture", false, false), Run);
+        assert_eq!(
+            decide_exploit_action("localhost-access", false, false),
+            SkipNoDetection
+        );
+        // JSON/machine mode always skips with a message — including the case that
+        // previously fell through every branch: a direct exploit, no detection.
+        assert_eq!(
+            decide_exploit_action("reveal", false, true),
+            SkipMachineMode
+        );
+        assert_eq!(
+            decide_exploit_action("localhost-access", true, true),
+            SkipMachineMode
+        );
+    }
+
+    #[test]
+    fn outcome_is_failure_classifies_unreachable_success_and_hard_failure() {
+        // Hard failure → failure.
+        assert!(outcome_is_failure(&ScanOutcome::Failure {
+            target: "http://x".to_string(),
+            error: "URL parse error".to_string(),
+        }));
+        // Success carrying an error (unreachable target) → failure (exit 2).
+        assert!(outcome_is_failure(&ScanOutcome::Success {
+            scan_results: scan_results_with_error(Some("target unreachable")),
+            found_vulnerability: false,
+        }));
+        // Clean success → not a failure (exit 0).
+        assert!(!outcome_is_failure(&ScanOutcome::Success {
+            scan_results: scan_results_with_error(None),
+            found_vulnerability: false,
+        }));
+        // Vulnerable success → not counted as a failure (exit 1 takes priority).
+        assert!(!outcome_is_failure(&ScanOutcome::Success {
+            scan_results: scan_results_with_error(None),
+            found_vulnerability: true,
+        }));
     }
 
     #[test]

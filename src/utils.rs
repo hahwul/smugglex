@@ -80,9 +80,22 @@ fn parse_set_cookies(response: &str) -> Vec<String> {
     cookies
 }
 
-/// Sanitize hostname for use in filenames
+/// Sanitize a hostname for use in an export filename. Any byte that is not an
+/// ASCII alphanumeric, `-` or `_` is replaced with `_`, so an IPv6 literal's
+/// brackets (`[::1]`), colons, dots, and every Windows-illegal filename
+/// character (`<>:"/\|?*`) are neutralized rather than reaching the filesystem.
+/// (The previous version only replaced `:`, `/`, `.`, leaving brackets and other
+/// hostile characters intact.)
 pub fn sanitize_hostname(host: &str) -> String {
-    host.replace([':', '/', '.'], "_")
+    host.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Export payload to a file
@@ -224,6 +237,17 @@ mod tests {
                         Set-Cookie: injected=evil\r\n\
                         more body";
         assert_eq!(parse_set_cookies(response), vec!["real=1".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_hostname_neutralizes_ipv6_and_hostile_chars() {
+        // IPv6 brackets and colons must not survive into a filename.
+        assert_eq!(sanitize_hostname("[::1]"), "___1_");
+        assert_eq!(sanitize_hostname("[fe80::1]:8080"), "_fe80__1__8080");
+        // Windows-illegal characters are all mapped to '_'.
+        assert_eq!(sanitize_hostname("a<b>c\"d|e?f*g"), "a_b_c_d_e_f_g");
+        // Allowed characters (alphanumerics, '-', '_') pass through unchanged.
+        assert_eq!(sanitize_hostname("my-host_1"), "my-host_1");
     }
 
     #[test]
