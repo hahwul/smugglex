@@ -18,7 +18,7 @@ use smugglex::model::{CheckResult, FingerprintInfo, ScanResults};
 use smugglex::mutator::{Mutator, MutatorConfig};
 use smugglex::output::{
     build_batch_results, log_scan_results, print_batch_json, save_batch_to_file,
-    save_results_to_file,
+    save_scan_results_to_file,
 };
 use smugglex::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
@@ -202,52 +202,77 @@ async fn main() -> Result<()> {
         .iter()
         .any(|o| matches!(o, ScanOutcome::Failure { .. }));
 
-    // Emit results
-    let json_mode = cli.effective_format().is_json();
-    if json_mode {
-        // Convert outcomes to ScanResults (synthesize minimal entry for failures so every
-        // requested target appears in the output).
-        let scan_results: Vec<ScanResults> = outcomes
-            .into_iter()
-            .map(|o| match o {
-                ScanOutcome::Success { scan_results, .. } => scan_results,
-                ScanOutcome::Failure { target, error } => ScanResults {
-                    target,
-                    method: cli.method.clone(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    fingerprint: None,
-                    checks: Vec::new(),
-                    error: Some(error),
-                },
-            })
-            .collect();
+    // Convert outcomes to ScanResults (synthesize a minimal entry for failures
+    // so every requested target appears in the output).
+    let scan_results: Vec<ScanResults> = outcomes
+        .into_iter()
+        .map(|o| match o {
+            ScanOutcome::Success { scan_results, .. } => scan_results,
+            ScanOutcome::Failure { target, error } => ScanResults {
+                target,
+                method: cli.method.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                fingerprint: None,
+                checks: Vec::new(),
+                error: Some(error),
+            },
+        })
+        .collect();
 
+    // Emit results. Track whether writing the -o file failed so a silent write
+    // error (disk full, unwritable path) is surfaced in the exit code rather
+    // than leaving a scripted caller believing the report was saved.
+    let json_mode = cli.effective_format().is_json();
+    let mut output_write_failed = false;
+    if json_mode {
         let batch = build_batch_results(scan_results, Some(env!("CARGO_PKG_VERSION")));
         print_batch_json(&batch);
 
         if let Some(ref output_file) = cli.output
             && let Err(e) = save_batch_to_file(&batch, output_file)
         {
+            output_write_failed = true;
             log(
                 LogLevel::Error,
                 &format!("failed to write batch output file: {}", e),
             );
         }
     } else {
-        // Plain text mode: preserve previous per-target human output behavior.
-        // We already printed inside scan_one_target for the non-json path.
-        // (scan_one_target calls log_scan_results when not in machine mode.)
-        // Nothing more to do here for output.
+        // Plain text mode: the per-target human output was already printed
+        // inside scan_one_target. Any `-o` file, though, is written here — once,
+        // after all targets — so a multi-target run no longer overwrites the
+        // file with only the last target's results. A single target keeps the
+        // flat ScanResults shape for backward compatibility; multiple targets
+        // get the same batch envelope as JSON mode.
+        if let Some(ref output_file) = cli.output {
+            let write_result = match scan_results.as_slice() {
+                [single] => save_scan_results_to_file(single, output_file),
+                _ => {
+                    let batch = build_batch_results(scan_results, Some(env!("CARGO_PKG_VERSION")));
+                    save_batch_to_file(&batch, output_file)
+                }
+            };
+            if let Err(e) = write_result {
+                output_write_failed = true;
+                log(
+                    LogLevel::Error,
+                    &format!("failed to write output file: {}", e),
+                );
+            }
+        }
     }
 
     // Final timing is intentionally omitted in machine mode to keep stdout pure.
     // In plain mode the per-target "scan completed in" messages were already emitted by the old path.
 
+    // A confirmed vulnerability is the primary signal, so it keeps priority for
+    // the exit code. Otherwise a target-level failure or a failed -o write is an
+    // operational problem → exit 2.
     if any_vulnerable {
         std::process::exit(1);
     }
 
-    if any_failures {
+    if any_failures || output_write_failed {
         std::process::exit(2);
     }
 
@@ -355,22 +380,31 @@ fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
     if !cli.urls.is_empty() {
         Ok(cli.urls.clone())
     } else if !io::stdin().is_terminal() {
-        Ok(io::stdin()
-            .lock()
-            .lines()
-            .filter_map(|line| match line {
-                Ok(l) if !l.trim().is_empty() => Some(l),
-                Err(e) => {
-                    eprintln!("{} Error reading from stdin: {}", "[!]".yellow().bold(), e);
-                    None
-                }
-                _ => None,
-            })
-            .collect())
+        Ok(collect_url_lines(io::stdin().lock().lines()))
     } else {
         Cli::parse_from(["smugglex", "--help"]);
         Ok(Vec::new())
     }
+}
+
+/// Collect target URLs from a stream of input lines: each is trimmed of
+/// surrounding whitespace and dropped if empty, so a `urls.txt` entry like
+/// ` http://x ` (stray spaces, common when piping) still parses downstream
+/// instead of failing `Url::parse` on the leading space. Read errors are
+/// reported to stderr and skipped rather than aborting the whole batch.
+fn collect_url_lines(lines: impl Iterator<Item = io::Result<String>>) -> Vec<String> {
+    lines
+        .filter_map(|line| match line {
+            Ok(l) => {
+                let trimmed = l.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Err(e) => {
+                eprintln!("{} Error reading from stdin: {}", "[!]".yellow().bold(), e);
+                None
+            }
+        })
+        .collect()
 }
 
 /// Core scan routine for one target. Returns a ScanOutcome (Success with full ScanResults
@@ -718,23 +752,10 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         }
     }
 
-    // Per-target file output (-o) is only done for plain mode here.
-    // For JSON batch the caller writes the full envelope once at the end.
-    if !is_machine()
-        && let Some(ref output_file) = cli.output
-        && let Err(e) = save_results_to_file(
-            output_file,
-            display_target,
-            &cli.method,
-            results.clone(),
-            &fingerprint_info,
-        )
-    {
-        log(
-            LogLevel::Error,
-            &format!("failed to write output file: {}", e),
-        );
-    }
+    // File output (-o) is written once by the caller after every target has
+    // been scanned, so multi-target plain-mode runs no longer overwrite each
+    // other (each `scan_one_target` used to clobber the shared file with only
+    // its own results). The caller has the full ScanResults via the outcome.
 
     let duration = start_time.elapsed();
     if !is_machine() {
@@ -1014,4 +1035,44 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_url_lines_trims_and_drops_blanks() {
+        let lines = vec![
+            Ok("  http://a.example  ".to_string()),
+            Ok("\thttp://b.example\t".to_string()),
+            Ok("   ".to_string()), // whitespace-only → dropped
+            Ok("".to_string()),    // empty → dropped
+            Ok("http://c.example".to_string()),
+        ];
+        assert_eq!(
+            collect_url_lines(lines.into_iter()),
+            vec![
+                "http://a.example".to_string(),
+                "http://b.example".to_string(),
+                "http://c.example".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_url_lines_skips_read_errors() {
+        let lines = vec![
+            Ok("http://ok.example".to_string()),
+            Err(io::Error::other("boom")),
+            Ok("http://ok2.example".to_string()),
+        ];
+        assert_eq!(
+            collect_url_lines(lines.into_iter()),
+            vec![
+                "http://ok.example".to_string(),
+                "http://ok2.example".to_string(),
+            ]
+        );
+    }
 }

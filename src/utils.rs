@@ -45,8 +45,22 @@ pub async fn fetch_cookies(
 
     let (response, _) = send_request(host, port, &request, timeout, verbose, use_tls).await?;
 
+    Ok(parse_set_cookies(&response))
+}
+
+/// Extract the `name=value` part of every `Set-Cookie` header in an HTTP
+/// response. Parsing stops at the first blank line (the header/body boundary),
+/// so a body line that merely *looks* like `set-cookie: ...` is never harvested
+/// as a cookie — mirroring the boundary handling in
+/// [`crate::fingerprint`]'s header parser.
+fn parse_set_cookies(response: &str) -> Vec<String> {
     let mut cookies = Vec::new();
     for line in response.lines() {
+        // The first blank line terminates the header section; everything after
+        // it is the response body and must not be scanned for headers.
+        if line.trim().is_empty() {
+            break;
+        }
         if line.len() >= 11
             && line.as_bytes()[..11].eq_ignore_ascii_case(b"set-cookie:")
             && let Some((_, cookie_value)) = line.split_once(':')
@@ -63,8 +77,7 @@ pub async fn fetch_cookies(
             }
         }
     }
-
-    Ok(cookies)
+    cookies
 }
 
 /// Sanitize hostname for use in filenames
@@ -171,5 +184,52 @@ pub fn log(level: LogLevel, message: &str) {
         }
     } else {
         println!("{} {} {}", time.dimmed(), level.prefix(), message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_set_cookies_extracts_name_value_pairs() {
+        let response = "HTTP/1.1 200 OK\r\n\
+                        Set-Cookie: session=abc; Path=/; HttpOnly\r\n\
+                        Set-Cookie: theme=dark; Max-Age=3600\r\n\
+                        Content-Type: text/html\r\n\
+                        \r\n\
+                        body";
+        assert_eq!(
+            parse_set_cookies(response),
+            vec!["session=abc".to_string(), "theme=dark".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_set_cookies_is_case_insensitive() {
+        let response = "HTTP/1.1 200 OK\r\nset-cookie: a=1\r\nSET-COOKIE: b=2\r\n\r\n";
+        assert_eq!(
+            parse_set_cookies(response),
+            vec!["a=1".to_string(), "b=2".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_set_cookies_stops_at_body_boundary() {
+        // A body line that merely looks like a Set-Cookie header must NOT be
+        // harvested — parsing stops at the first blank line.
+        let response = "HTTP/1.1 200 OK\r\n\
+                        Set-Cookie: real=1\r\n\
+                        \r\n\
+                        Set-Cookie: injected=evil\r\n\
+                        more body";
+        assert_eq!(parse_set_cookies(response), vec!["real=1".to_string()]);
+    }
+
+    #[test]
+    fn parse_set_cookies_ignores_empty_values() {
+        // `Set-Cookie:` with no value contributes nothing.
+        let response = "HTTP/1.1 200 OK\r\nSet-Cookie:\r\nSet-Cookie:   \r\n\r\n";
+        assert!(parse_set_cookies(response).is_empty());
     }
 }

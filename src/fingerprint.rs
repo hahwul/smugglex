@@ -94,6 +94,24 @@ fn parse_response_headers(response: &str) -> HashMap<String, String> {
     headers
 }
 
+/// True when `needle` appears in `haystack` as a whole word — bounded by a
+/// non-alphanumeric byte (or a string edge) on both sides.
+///
+/// Short product tokens such as `ats` (Apache Traffic Server) and `iis` are
+/// otherwise matched as bare substrings, misidentifying unrelated servers like
+/// `Stats-Server` (contains "ats") or `Wiis/1.0` (contains "iis"). Requiring a
+/// word boundary keeps `ATS/9.2` and `Microsoft-IIS/10.0` matching while
+/// rejecting the false positives.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    haystack.match_indices(needle).any(|(start, _)| {
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let end = start + needle.len();
+        let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        before_ok && after_ok
+    })
+}
+
 /// Identify the proxy type from parsed response headers.
 fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
     // Check specific indicator headers first (most reliable)
@@ -149,7 +167,7 @@ fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
         if server_lower.contains("envoy") {
             return ProxyType::Envoy;
         }
-        if server_lower.contains("ats") || server_lower.contains("trafficserver") {
+        if contains_word(&server_lower, "ats") || server_lower.contains("trafficserver") {
             return ProxyType::ATS;
         }
         if server_lower.contains("squid") {
@@ -158,7 +176,7 @@ fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
         if server_lower.contains("caddy") {
             return ProxyType::Caddy;
         }
-        if server_lower.contains("microsoft-iis") || server_lower.contains("iis") {
+        if contains_word(&server_lower, "iis") {
             return ProxyType::IIS;
         }
         if server_lower.contains("traefik") {
@@ -438,5 +456,46 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert("server".to_string(), "ATS/9.2.0".to_string());
         assert_eq!(identify_proxy(&headers), ProxyType::ATS);
+    }
+
+    #[test]
+    fn test_identify_ats_trafficserver_form() {
+        let mut headers = HashMap::new();
+        headers.insert("server".to_string(), "Apache Traffic Server".to_string());
+        // "trafficserver" (no space) or the ATS token — cover the packed form.
+        headers.insert("server".to_string(), "trafficserver/9".to_string());
+        assert_eq!(identify_proxy(&headers), ProxyType::ATS);
+    }
+
+    #[test]
+    fn ats_substring_is_not_a_false_positive() {
+        // A Server header that merely *contains* "ats" (e.g. a stats service)
+        // must NOT be fingerprinted as Apache Traffic Server.
+        let mut headers = HashMap::new();
+        headers.insert("server".to_string(), "Stats-Server/2.1".to_string());
+        assert_eq!(
+            identify_proxy(&headers),
+            ProxyType::Unknown("Stats-Server/2.1".to_string())
+        );
+    }
+
+    #[test]
+    fn iis_substring_is_not_a_false_positive() {
+        // "iis" inside an unrelated product name must not be read as IIS.
+        let mut headers = HashMap::new();
+        headers.insert("server".to_string(), "Wiisu/1.0".to_string());
+        assert_eq!(
+            identify_proxy(&headers),
+            ProxyType::Unknown("Wiisu/1.0".to_string())
+        );
+    }
+
+    #[test]
+    fn contains_word_boundaries() {
+        assert!(contains_word("ats/9.2.0", "ats"));
+        assert!(contains_word("microsoft-iis/10.0", "iis"));
+        assert!(!contains_word("stats-server", "ats"));
+        assert!(!contains_word("wiisu", "iis"));
+        assert!(!contains_word("ats9", "ats")); // glued to a digit → not a word
     }
 }

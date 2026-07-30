@@ -7,6 +7,12 @@ use crate::error::Result;
 use crate::model::{BatchScanResults, BatchSummary, CheckResult, FingerprintInfo, ScanResults};
 use crate::utils::{LogLevel, log};
 
+/// Monotonic counter making each temp filename unique *within* a process, so two
+/// concurrent writers (e.g. `-j >1 -o file` in plain mode, where every target
+/// task writes the same destination) never share a temp path. The PID alone is
+/// not enough: all those tasks run under one PID.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Atomically write `contents` to `path`: write to a sibling temp file, flush,
 /// then rename it over the destination. A failure during the write leaves any
 /// existing file at `path` untouched (the partial temp file is removed) instead
@@ -19,9 +25,11 @@ fn atomic_write(path: &str, contents: &str) -> std::io::Result<()> {
         .and_then(|n| n.to_str())
         .unwrap_or("smugglex-output");
     // Temp file alongside the destination so the final rename stays on the same
-    // filesystem (a cross-device rename would fail). Tag with the PID to avoid
-    // clashing with any concurrent writer.
-    let tmp_name = format!(".{}.{}.tmp", name, std::process::id());
+    // filesystem (a cross-device rename would fail). Tag with the PID *and* a
+    // per-call sequence number so concurrent writers in the same process don't
+    // clobber each other's temp file mid-write.
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_name = format!(".{}.{}.{}.tmp", name, std::process::id(), seq);
     let tmp = match dest.parent().filter(|p| !p.as_os_str().is_empty()) {
         Some(dir) => dir.join(tmp_name),
         None => std::path::PathBuf::from(tmp_name),
@@ -150,7 +158,14 @@ pub fn save_results_to_file(
         checks: results,
         error: None,
     };
-    let json_output = serde_json::to_string_pretty(&scan_results)?;
+    save_scan_results_to_file(&scan_results, output_file)
+}
+
+/// Serialize a fully-built [`ScanResults`] to JSON and write it to a file,
+/// preserving every field (including `error`). Used for single-target plain-mode
+/// `-o` output where the results have already been assembled.
+pub fn save_scan_results_to_file(scan_results: &ScanResults, output_file: &str) -> Result<()> {
+    let json_output = serde_json::to_string_pretty(scan_results)?;
     if fs::metadata(output_file).is_ok() {
         log(
             LogLevel::Warning,
@@ -255,5 +270,45 @@ mod tests {
         // Parent directory does not exist → error surfaced, nothing created.
         let res = atomic_write("/nonexistent-smugglex-dir/sub/report.json", "DATA");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn atomic_write_concurrent_writers_do_not_corrupt() {
+        // Many threads write the SAME destination at once (the plain-mode
+        // `-j>1 -o file` scenario). Each uses a distinct temp file, so the final
+        // content is always exactly one writer's payload — never a truncated or
+        // interleaved mix — and no temp files are left behind.
+        let dir = std::env::temp_dir().join(format!("smugglex-atomic-conc-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let dest = dir.join("report.json");
+        let dest_str = dest.to_str().unwrap().to_string();
+
+        let payloads: Vec<String> = (0..16).map(|i| format!("payload-{i:03}")).collect();
+        let valid: std::collections::HashSet<String> = payloads.iter().cloned().collect();
+
+        std::thread::scope(|s| {
+            for p in &payloads {
+                let dest_str = dest_str.clone();
+                s.spawn(move || {
+                    atomic_write(&dest_str, p).unwrap();
+                });
+            }
+        });
+
+        // The surviving content must be one complete, valid payload.
+        let final_content = fs::read_to_string(&dest).unwrap();
+        assert!(
+            valid.contains(&final_content),
+            "final content {final_content:?} was corrupted/interleaved"
+        );
+
+        // No temp files left behind by any writer.
+        let leftover_tmp = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
+        assert!(!leftover_tmp, "temp files should all be renamed/removed");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
