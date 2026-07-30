@@ -84,6 +84,40 @@ fn outcome_is_failure(o: &ScanOutcome) -> bool {
     }
 }
 
+/// What to do with a requested `--exploit` list, given the scan state.
+#[derive(Debug, PartialEq, Eq)]
+enum ExploitAction {
+    /// Run the exploit phase (plain mode, and either a detection or a
+    /// direct-firing exploit like smuggle/capture/reveal).
+    Run,
+    /// Skip because output is JSON/machine mode (exploit output is human-oriented).
+    SkipMachineMode,
+    /// Skip because nothing was detected and no direct-firing exploit was asked for.
+    SkipNoDetection,
+}
+
+/// Decide the exploit action. Extracted so every case is covered and testable —
+/// in particular a direct exploit (`reveal`/`smuggle`/`capture`) requested in
+/// JSON mode used to fall through *all* branches and be dropped with no message.
+fn decide_exploit_action(
+    exploit_str: &str,
+    found_vulnerability: bool,
+    machine: bool,
+) -> ExploitAction {
+    if machine {
+        // Exploit output never goes to the JSON stream; always tell the user.
+        return ExploitAction::SkipMachineMode;
+    }
+    let direct = exploit_str
+        .split(',')
+        .any(|x| matches!(x.trim(), "smuggle" | "capture" | "reveal"));
+    if found_vulnerability || direct {
+        ExploitAction::Run
+    } else {
+        ExploitAction::SkipNoDetection
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut cli = Cli::parse();
@@ -750,42 +784,39 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     // to keep stdout clean and because exploit details are better consumed interactively.
     if let Some(ref exploit_str) = cli.exploit {
         // The `smuggle`/`capture`/`reveal` exploits fire their payload directly
-        // and do not depend on a prior detection, so allow them to run even when
-        // the scan was quiet.
-        let direct_exploit = exploit_str
-            .split(',')
-            .any(|x| matches!(x.trim(), "smuggle" | "capture" | "reveal"));
-        if (found_vulnerability || direct_exploit) && !is_machine() {
-            let exploit_params = ExploitParams {
-                exploit_str,
-                results: &results,
-                host,
-                port,
-                path,
-                use_tls,
-                timeout: cli.timeout,
-                verbose: cli.verbose,
-                target_url: display_target,
-                ports_str: &cli.exploit_ports,
-                wordlist_path: cli.exploit_wordlist.as_deref(),
-                delay: cli.delay,
-                smuggle_request: cli.smuggle_request.as_deref(),
-                reveal_endpoint: cli.reveal_endpoint.as_deref(),
-                reveal_param: &cli.reveal_param,
-            };
-            if let Err(e) = run_exploits(&exploit_params).await {
-                log(LogLevel::Error, &format!("exploit phase failed: {}", e));
+        // and do not depend on a prior detection, so they may run even when the
+        // scan was quiet. Every case is classified so none is silently dropped.
+        match decide_exploit_action(exploit_str, found_vulnerability, is_machine()) {
+            ExploitAction::Run => {
+                let exploit_params = ExploitParams {
+                    exploit_str,
+                    results: &results,
+                    host,
+                    port,
+                    path,
+                    use_tls,
+                    timeout: cli.timeout,
+                    verbose: cli.verbose,
+                    target_url: display_target,
+                    ports_str: &cli.exploit_ports,
+                    wordlist_path: cli.exploit_wordlist.as_deref(),
+                    delay: cli.delay,
+                    smuggle_request: cli.smuggle_request.as_deref(),
+                    reveal_endpoint: cli.reveal_endpoint.as_deref(),
+                    reveal_param: &cli.reveal_param,
+                };
+                if let Err(e) = run_exploits(&exploit_params).await {
+                    log(LogLevel::Error, &format!("exploit phase failed: {}", e));
+                }
             }
-        } else if found_vulnerability && is_machine() {
-            log(
+            ExploitAction::SkipMachineMode => log(
                 LogLevel::Warning,
                 "exploit requested in JSON mode; skipping (re-run without --json/-f json for exploit output)",
-            );
-        } else if !is_machine() {
-            log(
+            ),
+            ExploitAction::SkipNoDetection => log(
                 LogLevel::Warning,
                 "exploit requested but no vulnerabilities found to exploit",
-            );
+            ),
         }
     }
 
@@ -1109,6 +1140,30 @@ mod tests {
             checks: Vec::new(),
             error: error.map(|s| s.to_string()),
         }
+    }
+
+    #[test]
+    fn decide_exploit_action_covers_every_case() {
+        use ExploitAction::*;
+        // Plain mode: a detection runs the phase; a direct exploit runs even
+        // without one; otherwise it's a no-detection skip.
+        assert_eq!(decide_exploit_action("localhost-access", true, false), Run);
+        assert_eq!(decide_exploit_action("reveal", false, false), Run);
+        assert_eq!(decide_exploit_action("smuggle,capture", false, false), Run);
+        assert_eq!(
+            decide_exploit_action("localhost-access", false, false),
+            SkipNoDetection
+        );
+        // JSON/machine mode always skips with a message — including the case that
+        // previously fell through every branch: a direct exploit, no detection.
+        assert_eq!(
+            decide_exploit_action("reveal", false, true),
+            SkipMachineMode
+        );
+        assert_eq!(
+            decide_exploit_action("localhost-access", true, true),
+            SkipMachineMode
+        );
     }
 
     #[test]
