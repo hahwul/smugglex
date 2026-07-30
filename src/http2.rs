@@ -39,6 +39,11 @@ const FRAME_GOAWAY: u8 = 0x7;
 const FLAG_ACK: u8 = 0x1;
 const FLAG_END_STREAM: u8 = 0x1;
 const FLAG_END_HEADERS: u8 = 0x4;
+// HEADERS-frame layout flags (RFC 9113 §6.2). When set, they prepend fields to
+// the frame payload *before* the HPACK header block, so the `:status` byte is
+// not at offset 0.
+const FLAG_PADDED: u8 = 0x8;
+const FLAG_PRIORITY: u8 = 0x20;
 
 /// Number of attack confirmation retries that must also stall.
 const H2_CONFIRMATION_RETRIES: usize = 2;
@@ -169,6 +174,31 @@ struct H2Outcome {
     /// distinct from a stall).
     reset: bool,
     duration: Duration,
+}
+
+/// Byte offset of the HPACK header block within a HEADERS frame payload, given
+/// its flags. A `PADDED` frame prepends a 1-byte Pad Length; a `PRIORITY` frame
+/// prepends a 5-byte priority section (stream dependency + weight). Both can be
+/// present, in which case Pad Length comes first (RFC 9113 §6.2).
+fn headers_block_offset(flags: u8) -> usize {
+    let mut offset = 0;
+    if flags & FLAG_PADDED != 0 {
+        offset += 1;
+    }
+    if flags & FLAG_PRIORITY != 0 {
+        offset += 5;
+    }
+    offset
+}
+
+/// Decode the response `:status` from a HEADERS frame payload, honoring the
+/// PADDED/PRIORITY prefix so the status byte is read from the actual start of
+/// the HPACK block rather than blindly from offset 0.
+fn headers_status(payload: &[u8], flags: u8) -> Option<u16> {
+    payload
+        .get(headers_block_offset(flags))
+        .copied()
+        .and_then(status_from_indexed)
 }
 
 /// Map a fully-indexed `:status` HPACK byte to its code (static table 8..14).
@@ -305,7 +335,7 @@ fn scan_frames(acc: &[u8]) -> FrameScan {
         if ftype == FRAME_SETTINGS && flags & FLAG_ACK == 0 {
             send_settings_ack = true;
         } else if ftype == FRAME_HEADERS && stream_id == 1 {
-            let status = payload.first().copied().and_then(status_from_indexed);
+            let status = headers_status(payload, flags);
             return FrameScan::Outcome {
                 outcome: terminal(true, status, false),
                 send_settings_ack,
@@ -674,6 +704,65 @@ mod tests {
             }
             _ => panic!("expected a terminal HEADERS outcome"),
         }
+    }
+
+    #[test]
+    fn headers_block_offset_accounts_for_flags() {
+        assert_eq!(headers_block_offset(FLAG_END_HEADERS), 0);
+        assert_eq!(headers_block_offset(FLAG_PADDED), 1);
+        assert_eq!(headers_block_offset(FLAG_PRIORITY), 5);
+        // Both present: Pad Length (1) + priority section (5).
+        assert_eq!(headers_block_offset(FLAG_PADDED | FLAG_PRIORITY), 6);
+    }
+
+    #[test]
+    fn scan_frames_decodes_status_with_padded_headers() {
+        // PADDED HEADERS: [pad_len=2][:status 200][pad][pad]. The status byte is
+        // at offset 1, not 0 — decoding offset 0 (pad length) would misread it.
+        let payload = [0x02u8, 0x88, 0x00, 0x00];
+        let mut acc = Vec::new();
+        put_frame(
+            &mut acc,
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_PADDED,
+            1,
+            &payload,
+        );
+        match scan_frames(&acc) {
+            FrameScan::Outcome { outcome, .. } => {
+                assert!(outcome.responded);
+                assert_eq!(outcome.status, Some(200), "status read past the pad length");
+            }
+            _ => panic!("expected a terminal HEADERS outcome"),
+        }
+    }
+
+    #[test]
+    fn scan_frames_decodes_status_with_priority_headers() {
+        // PRIORITY HEADERS: 5-byte priority section then the HPACK block.
+        let payload = [0x00u8, 0x00, 0x00, 0x01, 0x10, 0x8d]; // ...then :status 404
+        let mut acc = Vec::new();
+        put_frame(
+            &mut acc,
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_PRIORITY,
+            1,
+            &payload,
+        );
+        match scan_frames(&acc) {
+            FrameScan::Outcome { outcome, .. } => {
+                assert!(outcome.responded);
+                assert_eq!(outcome.status, Some(404), "status read past priority fields");
+            }
+            _ => panic!("expected a terminal HEADERS outcome"),
+        }
+    }
+
+    #[test]
+    fn headers_status_out_of_range_offset_is_none() {
+        // A truncated PADDED frame whose payload is too short for the declared
+        // prefix must not panic; it just yields no status (still `responded`).
+        assert_eq!(headers_status(&[0x02], FLAG_PADDED | FLAG_PRIORITY), None);
     }
 
     #[test]
