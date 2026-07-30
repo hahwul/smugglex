@@ -251,6 +251,14 @@ async fn get_stream_direct(
     }
 }
 
+/// Whether a proxy's CONNECT reply establishes the tunnel: its status line must
+/// parse to a 2xx code. The previous `contains("200")` substring test both
+/// accepted failures whose reason phrase happened to contain "200" (e.g.
+/// `HTTP/1.1 502 upstream 20000ms`) and rejected valid non-200 2xx replies.
+fn connect_reply_ok(status_line: &str) -> bool {
+    matches!(crate::utils::parse_status_code(status_line), Some(200..=299))
+}
+
 /// Creates a stream through an HTTP proxy using CONNECT tunnel.
 async fn get_stream_via_proxy(
     host: &str,
@@ -282,7 +290,7 @@ async fn get_stream_via_proxy(
     let mut status_line = String::new();
     reader.read_line(&mut status_line).await?;
 
-    if !status_line.contains("200") {
+    if !connect_reply_ok(&status_line) {
         return Err(SmugglexError::Io(format!(
             "proxy CONNECT failed: {}",
             status_line.trim()
@@ -748,6 +756,18 @@ kJ8CRz+khnaPy0Io4PLR\n\
             vec![b"h2".to_vec()],
             "default h2 config advertises ALPN h2"
         );
+    }
+
+    #[test]
+    fn connect_reply_ok_requires_2xx_status() {
+        assert!(connect_reply_ok("HTTP/1.1 200 Connection established\r\n"));
+        assert!(connect_reply_ok("HTTP/1.0 200 OK\r\n"));
+        // A 2xx other than 200 still establishes the tunnel.
+        assert!(connect_reply_ok("HTTP/1.1 204 No Content\r\n"));
+        // Failures must be rejected even when the reason phrase contains "200".
+        assert!(!connect_reply_ok("HTTP/1.1 502 upstream 20000ms timeout\r\n"));
+        assert!(!connect_reply_ok("HTTP/1.1 407 Proxy Authentication Required\r\n"));
+        assert!(!connect_reply_ok("garbage\r\n"));
     }
 
     #[test]
