@@ -158,7 +158,14 @@ pub fn save_results_to_file(
         checks: results,
         error: None,
     };
-    let json_output = serde_json::to_string_pretty(&scan_results)?;
+    save_scan_results_to_file(&scan_results, output_file)
+}
+
+/// Serialize a fully-built [`ScanResults`] to JSON and write it to a file,
+/// preserving every field (including `error`). Used for single-target plain-mode
+/// `-o` output where the results have already been assembled.
+pub fn save_scan_results_to_file(scan_results: &ScanResults, output_file: &str) -> Result<()> {
+    let json_output = serde_json::to_string_pretty(scan_results)?;
     if fs::metadata(output_file).is_ok() {
         log(
             LogLevel::Warning,

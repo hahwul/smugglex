@@ -18,7 +18,7 @@ use smugglex::model::{CheckResult, FingerprintInfo, ScanResults};
 use smugglex::mutator::{Mutator, MutatorConfig};
 use smugglex::output::{
     build_batch_results, log_scan_results, print_batch_json, save_batch_to_file,
-    save_results_to_file,
+    save_scan_results_to_file,
 };
 use smugglex::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
@@ -202,26 +202,26 @@ async fn main() -> Result<()> {
         .iter()
         .any(|o| matches!(o, ScanOutcome::Failure { .. }));
 
+    // Convert outcomes to ScanResults (synthesize a minimal entry for failures
+    // so every requested target appears in the output).
+    let scan_results: Vec<ScanResults> = outcomes
+        .into_iter()
+        .map(|o| match o {
+            ScanOutcome::Success { scan_results, .. } => scan_results,
+            ScanOutcome::Failure { target, error } => ScanResults {
+                target,
+                method: cli.method.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                fingerprint: None,
+                checks: Vec::new(),
+                error: Some(error),
+            },
+        })
+        .collect();
+
     // Emit results
     let json_mode = cli.effective_format().is_json();
     if json_mode {
-        // Convert outcomes to ScanResults (synthesize minimal entry for failures so every
-        // requested target appears in the output).
-        let scan_results: Vec<ScanResults> = outcomes
-            .into_iter()
-            .map(|o| match o {
-                ScanOutcome::Success { scan_results, .. } => scan_results,
-                ScanOutcome::Failure { target, error } => ScanResults {
-                    target,
-                    method: cli.method.clone(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    fingerprint: None,
-                    checks: Vec::new(),
-                    error: Some(error),
-                },
-            })
-            .collect();
-
         let batch = build_batch_results(scan_results, Some(env!("CARGO_PKG_VERSION")));
         print_batch_json(&batch);
 
@@ -234,10 +234,28 @@ async fn main() -> Result<()> {
             );
         }
     } else {
-        // Plain text mode: preserve previous per-target human output behavior.
-        // We already printed inside scan_one_target for the non-json path.
-        // (scan_one_target calls log_scan_results when not in machine mode.)
-        // Nothing more to do here for output.
+        // Plain text mode: the per-target human output was already printed
+        // inside scan_one_target. Any `-o` file, though, is written here — once,
+        // after all targets — so a multi-target run no longer overwrites the
+        // file with only the last target's results. A single target keeps the
+        // flat ScanResults shape for backward compatibility; multiple targets
+        // get the same batch envelope as JSON mode.
+        if let Some(ref output_file) = cli.output {
+            let write_result = match scan_results.as_slice() {
+                [single] => save_scan_results_to_file(single, output_file),
+                _ => {
+                    let batch =
+                        build_batch_results(scan_results, Some(env!("CARGO_PKG_VERSION")));
+                    save_batch_to_file(&batch, output_file)
+                }
+            };
+            if let Err(e) = write_result {
+                log(
+                    LogLevel::Error,
+                    &format!("failed to write output file: {}", e),
+                );
+            }
+        }
     }
 
     // Final timing is intentionally omitted in machine mode to keep stdout pure.
@@ -727,23 +745,10 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         }
     }
 
-    // Per-target file output (-o) is only done for plain mode here.
-    // For JSON batch the caller writes the full envelope once at the end.
-    if !is_machine()
-        && let Some(ref output_file) = cli.output
-        && let Err(e) = save_results_to_file(
-            output_file,
-            display_target,
-            &cli.method,
-            results.clone(),
-            &fingerprint_info,
-        )
-    {
-        log(
-            LogLevel::Error,
-            &format!("failed to write output file: {}", e),
-        );
-    }
+    // File output (-o) is written once by the caller after every target has
+    // been scanned, so multi-target plain-mode runs no longer overwrite each
+    // other (each `scan_one_target` used to clobber the shared file with only
+    // its own results). The caller has the full ScanResults via the outcome.
 
     let duration = start_time.elapsed();
     if !is_machine() {
