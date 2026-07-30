@@ -237,7 +237,8 @@ pub struct Cli {
         help_heading = "REQUEST",
         short = 'j',
         long = "concurrency",
-        default_value_t = 1
+        default_value_t = 1,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
     )]
     pub concurrency: usize,
 
@@ -246,11 +247,11 @@ pub struct Cli {
     pub proxy: Option<String>,
 
     /// Maximum number of payloads to test per check type
-    #[arg(help_heading = "DETECT", long = "max-payloads")]
+    #[arg(help_heading = "DETECT", long = "max-payloads", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     pub max_payloads: Option<usize>,
 
     /// Number of baseline requests for timing measurement
-    #[arg(help_heading = "DETECT", long = "baseline-count", default_value_t = 3)]
+    #[arg(help_heading = "DETECT", long = "baseline-count", default_value_t = 3, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     pub baseline_count: usize,
 
     /// Skip TLS certificate verification (allow self-signed certificates)
@@ -327,5 +328,30 @@ mod tests {
         // A positive timeout still parses.
         let cli = Cli::try_parse_from(["smugglex", "http://x", "-t", "5"]).unwrap();
         assert_eq!(cli.timeout, 5);
+    }
+
+    #[test]
+    fn count_flags_reject_zero_at_parse_time() {
+        // `-j 0` silently degraded to sequential; `--baseline-count 0` and
+        // `--max-payloads 0` produced meaningless scans. All must be rejected.
+        assert!(Cli::try_parse_from(["smugglex", "http://x", "-j", "0"]).is_err());
+        assert!(Cli::try_parse_from(["smugglex", "http://x", "--baseline-count", "0"]).is_err());
+        assert!(Cli::try_parse_from(["smugglex", "http://x", "--max-payloads", "0"]).is_err());
+
+        // Positive values still parse.
+        let cli = Cli::try_parse_from([
+            "smugglex",
+            "http://x",
+            "-j",
+            "4",
+            "--baseline-count",
+            "2",
+            "--max-payloads",
+            "10",
+        ])
+        .unwrap();
+        assert_eq!(cli.concurrency, 4);
+        assert_eq!(cli.baseline_count, 2);
+        assert_eq!(cli.max_payloads, Some(10));
     }
 }
