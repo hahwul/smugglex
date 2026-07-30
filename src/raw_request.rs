@@ -294,6 +294,14 @@ fn split_host_port(host_value: &str) -> Result<(String, Option<u16>)> {
             })?;
             Ok((host.to_string(), Some(parsed)))
         }
+        // Trailing colon with no port (`example.com:` / `[::1]:`) — a common
+        // copy-paste artifact. Drop the empty port so the host is usable, but
+        // only when the host part is unambiguous (bracketed IPv6 or no embedded
+        // colon), mirroring the split guard above so an unbracketed IPv6 like
+        // `fe80::` is returned whole instead of being truncated to `fe80:`.
+        Some((host, "")) if !host.is_empty() && (host.ends_with(']') || !host.contains(':')) => {
+            Ok((host.to_string(), None))
+        }
         _ => Ok((host_value.to_string(), None)),
     }
 }
@@ -630,6 +638,29 @@ mod tests {
             split_host_port("[::1]:8080").unwrap(),
             ("[::1]".to_string(), Some(8080))
         );
+    }
+
+    #[test]
+    fn split_host_port_drops_trailing_colon_with_no_port() {
+        // `example.com:` and `[::1]:` carry a colon but no port; return just the
+        // host so the synthetic connect URL is valid (not `example.com::443`).
+        assert_eq!(
+            split_host_port("example.com:").unwrap(),
+            ("example.com".to_string(), None)
+        );
+        assert_eq!(
+            split_host_port("[::1]:").unwrap(),
+            ("[::1]".to_string(), None)
+        );
+        // An unbracketed IPv6 ending in `::` must NOT be truncated to `fe80:`.
+        assert_eq!(
+            split_host_port("fe80::").unwrap(),
+            ("fe80::".to_string(), None)
+        );
+        // Full parse path: a trailing-colon Host yields a clean connect URL.
+        let raw = parse_raw_request("GET /a HTTP/1.1\r\nHost: example.com:\r\n\r\n").unwrap();
+        assert_eq!(raw.host, "example.com");
+        assert_eq!(raw.connect_url("https"), "https://example.com:443/");
     }
 
     #[test]
