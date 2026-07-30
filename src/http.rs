@@ -240,6 +240,21 @@ pub fn validate_proxy_url(proxy_url: &str) -> Result<()> {
     }
 }
 
+/// Build the TLS [`ServerName`] for `host`, tolerating a bracketed IPv6 literal
+/// (`[::1]`). rustls parses a *bare* IPv6/IPv4 string into an IP `ServerName`
+/// but rejects the bracketed form, and DNS names never carry brackets — so a
+/// single surrounding `[...]` is stripped first. Hostnames pass through
+/// unchanged. Without this, an IPv6-literal HTTPS target failed the handshake
+/// (`ServerName::try_from("[::1]")` errors) even though the TCP connect — which
+/// *does* want the bracketed `[::1]:port` form — succeeded.
+pub(crate) fn server_name(host: &str) -> Result<ServerName<'static>> {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    Ok(ServerName::try_from(bare.to_string())?)
+}
+
 /// A trait that combines AsyncRead and AsyncWrite.
 trait ReadWrite: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite> ReadWrite for T {}
@@ -267,7 +282,7 @@ async fn get_stream_direct(
     if use_tls {
         let connector = TlsConnector::from(Arc::clone(get_tls_config()));
         let stream = TcpStream::connect(&addr).await?;
-        let domain = ServerName::try_from(host.to_string())?;
+        let domain = server_name(host)?;
         let tls_stream = connector.connect(domain, stream).await?;
         Ok(Box::new(tls_stream))
     } else {
@@ -346,7 +361,7 @@ async fn get_stream_via_proxy(
     // Now we have a tunnel; do TLS handshake if needed
     if use_tls {
         let connector = TlsConnector::from(Arc::clone(get_tls_config()));
-        let domain = ServerName::try_from(host.to_string())?;
+        let domain = server_name(host)?;
         let tls_stream = connector.connect(domain, stream).await?;
         Ok(Box::new(tls_stream))
     } else {
@@ -793,6 +808,23 @@ kJ8CRz+khnaPy0Io4PLR\n\
             vec![b"h2".to_vec()],
             "default h2 config advertises ALPN h2"
         );
+    }
+
+    #[test]
+    fn server_name_handles_bracketed_ipv6_and_hostnames() {
+        // The whole point of the helper: rustls rejects a *bracketed* IPv6
+        // literal, so an IPv6 HTTPS target used to fail the handshake. Stripping
+        // the brackets yields a valid IP ServerName.
+        assert!(
+            ServerName::try_from("[::1]".to_string()).is_err(),
+            "bracketed IPv6 must be invalid as a raw ServerName — the bug this fixes"
+        );
+        assert!(server_name("[::1]").is_ok());
+        assert!(server_name("[fe80::1]").is_ok());
+        // Bare IP and ordinary hostnames pass through unchanged.
+        assert!(server_name("::1").is_ok());
+        assert!(server_name("127.0.0.1").is_ok());
+        assert!(server_name("example.com").is_ok());
     }
 
     #[test]

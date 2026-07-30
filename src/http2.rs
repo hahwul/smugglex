@@ -217,8 +217,13 @@ fn status_from_indexed(byte: u8) -> Option<u16> {
 
 async fn h2_connect(host: &str, port: u16) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
     let connector = TlsConnector::from(std::sync::Arc::clone(crate::http::get_h2_tls_config()));
-    let tcp = TcpStream::connect((host, port)).await?;
-    let dnsname = rustls::pki_types::ServerName::try_from(host.to_string())?;
+    // Use the string address form (`host:port`) like the HTTP/1.1 path rather
+    // than the `(host, port)` tuple: the tuple treats a bracketed IPv6 literal
+    // `[::1]` as a hostname and fails to resolve, whereas `[::1]:port` parses as
+    // a socket address. The SNI name goes through the shared bracket-aware
+    // `server_name` helper.
+    let tcp = TcpStream::connect(format!("{host}:{port}")).await?;
+    let dnsname = crate::http::server_name(host)?;
     let tls = connector.connect(dnsname, tcp).await?;
     Ok(tls)
 }
