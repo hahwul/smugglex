@@ -84,6 +84,26 @@ fn outcome_is_failure(o: &ScanOutcome) -> bool {
     }
 }
 
+/// Parse a comma-separated `--exploit-ports` list into `(valid ports, invalid
+/// tokens)`. Empty/whitespace-only segments are ignored; any token that is not a
+/// valid `u16` is returned as invalid so the caller can warn rather than silently
+/// drop it.
+fn parse_exploit_ports(ports_str: &str) -> (Vec<u16>, Vec<String>) {
+    let mut valid = Vec::new();
+    let mut invalid = Vec::new();
+    for tok in ports_str
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        match tok.parse::<u16>() {
+            Ok(p) => valid.push(p),
+            Err(_) => invalid.push(tok.to_string()),
+        }
+    }
+    (valid, invalid)
+}
+
 /// What to do with a requested `--exploit` list, given the scan state.
 #[derive(Debug, PartialEq, Eq)]
 enum ExploitAction {
@@ -903,12 +923,18 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     None => continue,
                 };
 
-                // Parse target ports
-                let localhost_ports: Vec<u16> = params
-                    .ports_str
-                    .split(',')
-                    .filter_map(|s| s.trim().parse::<u16>().ok())
-                    .collect();
+                // Parse target ports, surfacing any invalid tokens instead of
+                // silently dropping them (e.g. a typo'd `--exploit-ports 22,htt,80`).
+                let (localhost_ports, invalid_ports) = parse_exploit_ports(params.ports_str);
+                if !invalid_ports.is_empty() {
+                    log(
+                        LogLevel::Warning,
+                        &format!(
+                            "ignoring invalid --exploit-ports token(s): {} (must be 0-65535)",
+                            invalid_ports.join(", ")
+                        ),
+                    );
+                }
 
                 if localhost_ports.is_empty() {
                     log(
@@ -1140,6 +1166,18 @@ mod tests {
             checks: Vec::new(),
             error: error.map(|s| s.to_string()),
         }
+    }
+
+    #[test]
+    fn parse_exploit_ports_separates_valid_and_invalid() {
+        let (valid, invalid) = parse_exploit_ports("22, 80 ,http,443,99999,,8080");
+        assert_eq!(valid, vec![22, 80, 443, 8080]);
+        // "http" is non-numeric; "99999" overflows u16 — both reported, not dropped.
+        assert_eq!(invalid, vec!["http".to_string(), "99999".to_string()]);
+        // All-valid input yields no invalid tokens.
+        assert_eq!(parse_exploit_ports("22,443").1, Vec::<String>::new());
+        // Empty/whitespace input yields nothing at all.
+        assert_eq!(parse_exploit_ports("  , ,").0, Vec::<u16>::new());
     }
 
     #[test]
