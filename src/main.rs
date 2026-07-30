@@ -355,22 +355,31 @@ fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
     if !cli.urls.is_empty() {
         Ok(cli.urls.clone())
     } else if !io::stdin().is_terminal() {
-        Ok(io::stdin()
-            .lock()
-            .lines()
-            .filter_map(|line| match line {
-                Ok(l) if !l.trim().is_empty() => Some(l),
-                Err(e) => {
-                    eprintln!("{} Error reading from stdin: {}", "[!]".yellow().bold(), e);
-                    None
-                }
-                _ => None,
-            })
-            .collect())
+        Ok(collect_url_lines(io::stdin().lock().lines()))
     } else {
         Cli::parse_from(["smugglex", "--help"]);
         Ok(Vec::new())
     }
+}
+
+/// Collect target URLs from a stream of input lines: each is trimmed of
+/// surrounding whitespace and dropped if empty, so a `urls.txt` entry like
+/// ` http://x ` (stray spaces, common when piping) still parses downstream
+/// instead of failing `Url::parse` on the leading space. Read errors are
+/// reported to stderr and skipped rather than aborting the whole batch.
+fn collect_url_lines(lines: impl Iterator<Item = io::Result<String>>) -> Vec<String> {
+    lines
+        .filter_map(|line| match line {
+            Ok(l) => {
+                let trimmed = l.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Err(e) => {
+                eprintln!("{} Error reading from stdin: {}", "[!]".yellow().bold(), e);
+                None
+            }
+        })
+        .collect()
 }
 
 /// Core scan routine for one target. Returns a ScanOutcome (Success with full ScanResults
@@ -1014,4 +1023,44 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_url_lines_trims_and_drops_blanks() {
+        let lines = vec![
+            Ok("  http://a.example  ".to_string()),
+            Ok("\thttp://b.example\t".to_string()),
+            Ok("   ".to_string()), // whitespace-only → dropped
+            Ok("".to_string()),    // empty → dropped
+            Ok("http://c.example".to_string()),
+        ];
+        assert_eq!(
+            collect_url_lines(lines.into_iter()),
+            vec![
+                "http://a.example".to_string(),
+                "http://b.example".to_string(),
+                "http://c.example".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_url_lines_skips_read_errors() {
+        let lines = vec![
+            Ok("http://ok.example".to_string()),
+            Err(io::Error::other("boom")),
+            Ok("http://ok2.example".to_string()),
+        ];
+        assert_eq!(
+            collect_url_lines(lines.into_iter()),
+            vec![
+                "http://ok.example".to_string(),
+                "http://ok2.example".to_string(),
+            ]
+        );
+    }
 }
