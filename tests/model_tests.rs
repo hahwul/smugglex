@@ -675,6 +675,22 @@ fn test_confidence_skip_when_none() {
 }
 
 #[test]
+fn test_check_result_failed_constructor() {
+    let result = CheckResult::failed("cl-te", "connection refused");
+
+    assert_eq!(result.check_type, "cl-te");
+    assert!(!result.vulnerable);
+    assert_eq!(result.normal_status, "CHECK_FAILED");
+    assert_eq!(result.payload_index, None);
+    assert_eq!(result.normal_duration_ms, 0);
+    assert!(result.confidence.is_none());
+    assert!(result.detection_signals.is_empty());
+    assert_eq!(result.diagnostics, vec!["check_failed: connection refused"]);
+    // A non-empty timestamp is stamped so the placeholder is a well-formed record.
+    assert!(!result.timestamp.is_empty());
+}
+
+#[test]
 fn test_confidence_backward_compat_deserialization() {
     // JSON without confidence field should deserialize with confidence: None
     let json = r#"{

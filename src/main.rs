@@ -104,6 +104,13 @@ fn parse_exploit_ports(ports_str: &str) -> (Vec<u16>, Vec<String>) {
     (valid, invalid)
 }
 
+/// Interpret literal `\r\n` / `\n` escape sequences in a CLI-supplied request so
+/// a multi-line raw request can be passed on a single command line. Order matters:
+/// `\r\n` is expanded before the bare `\n` so a CRLF is not split into `\r` + LF.
+fn interpret_line_escapes(s: &str) -> String {
+    s.replace("\\r\\n", "\r\n").replace("\\n", "\n")
+}
+
 /// What to do with a requested `--exploit` list, given the scan state.
 #[derive(Debug, PartialEq, Eq)]
 enum ExploitAction {
@@ -721,20 +728,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                         &format!("{} check failed: {}", check_name, e),
                     );
                 }
-                results.push(CheckResult {
-                    check_type: check_name.to_string(),
-                    vulnerable: false,
-                    payload_index: None,
-                    normal_status: "CHECK_FAILED".to_string(),
-                    attack_status: None,
-                    normal_duration_ms: 0,
-                    attack_duration_ms: None,
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    payload: None,
-                    confidence: None,
-                    detection_signals: Vec::new(),
-                    diagnostics: vec![format!("check_failed: {}", e)],
-                });
+                results.push(CheckResult::failed(check_name, e));
                 pb.inc(1);
             }
         }
@@ -1040,7 +1034,7 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                 // on one CLI line; fall back to the GPOST-solving default.
                 let inner_request = params
                     .smuggle_request
-                    .map(|s| s.replace("\\r\\n", "\r\n").replace("\\n", "\n"))
+                    .map(interpret_line_escapes)
                     .unwrap_or_else(|| smugglex::exploit::DEFAULT_SMUGGLE_REQUEST.to_string());
 
                 let smuggle_params = smugglex::exploit::SmuggleParams {
@@ -1070,7 +1064,7 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                 // recon step the access-control labs need); must be complete.
                 let smuggled = params
                     .smuggle_request
-                    .map(|s| s.replace("\\r\\n", "\r\n").replace("\\n", "\n"))
+                    .map(interpret_line_escapes)
                     .unwrap_or_else(|| {
                         format!("GET /admin HTTP/1.1\r\nHost: {}\r\n\r\n", params.host)
                     });
@@ -1137,6 +1131,18 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interpret_line_escapes_expands_crlf_before_lf() {
+        // A literal \r\n becomes a real CRLF (not split into \r + LF), and a
+        // bare \n becomes a lone LF.
+        assert_eq!(
+            interpret_line_escapes("GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n"),
+            "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+        );
+        assert_eq!(interpret_line_escapes("a\\nb"), "a\nb");
+        assert_eq!(interpret_line_escapes("no escapes"), "no escapes");
+    }
 
     #[test]
     fn collect_url_lines_trims_and_drops_blanks() {
