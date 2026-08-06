@@ -1059,16 +1059,37 @@ fn build_check_result(
 }
 
 /// Runs a set of attack requests for a given check type.
-pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult> {
-    let total_requests = params.attack_requests.len();
+/// A confirmed finding carried out of the attack loop: `(payload index, payload
+/// string, anomaly info, optional differential-control observation, optional
+/// follow-up divergence)`.
+type VulnerabilityFinding = (
+    usize,
+    String,
+    VulnerabilityInfo,
+    Option<ControlObservation>,
+    Option<FollowupObservation>,
+);
 
-    if !params.verbose {
-        params.pb.set_message(format!(
-            "[{}/{}] checking {} (0/{})",
-            params.current_check, params.total_checks, params.check_name, total_requests
-        ));
-    }
+/// Baseline timing measurement together with the derived anomaly threshold.
+struct TimingContext {
+    baseline: BaselineMeasurement,
+    /// Milliseconds at or above which an attack response is timing-anomalous.
+    timing_threshold: u128,
+    /// Whether per-request baseline variance is large enough to demote
+    /// timing-only findings (see [`baseline_is_noisy`]).
+    baseline_noisy: bool,
+}
 
+/// Measure the timing baseline and compute the noise-aware anomaly threshold.
+///
+/// A slow attack must beat BOTH the relative multiplier over the median AND the
+/// worst observed baseline plus a buffer, so a single slow baseline sample can't
+/// inflate noise into a false anomaly. When attacks use a non-GET method the GET
+/// baseline is augmented with method-matched probes — backends where POST is
+/// naturally slower than GET are a common false-positive source, and the plain
+/// GET baseline would otherwise understate the per-request floor for the real
+/// attack shape.
+async fn establish_timing_context(params: &CheckParams<'_>) -> Result<TimingContext> {
     let baseline = measure_baseline(
         params.host,
         params.port,
@@ -1079,24 +1100,14 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
         params.baseline_count,
     )
     .await?;
-    let normal_status = baseline.status.clone();
-    let normal_duration = baseline.duration;
-    // Noise-aware threshold: a slow attack must beat BOTH the relative
-    // multiplier over the median AND the worst observed baseline plus a buffer.
-    // This prevents a single slow baseline sample from inflating noise that
-    // looks like an anomaly.
-    // Augment the GET baseline with a small set of method-matched probes when
-    // attacks use a different method. This corrects timing thresholds on
-    // backends where POST handling is naturally slower than GET — a common
-    // false-positive source where the GET baseline understates the per-request
-    // floor for the actual attack shape.
+
     let attack_method = params
         .attack_requests
         .first()
         .map(|p| payload_method(p))
         .unwrap_or_else(|| "GET".to_string());
     let mut max_baseline = baseline.max_duration;
-    let mut median_baseline = normal_duration;
+    let mut median_baseline = baseline.duration;
     if attack_method != "GET" && !attack_method.is_empty() {
         let extra = method_matched_baseline_durations(
             params.host,
@@ -1116,7 +1127,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                 max_baseline = extra_max;
             }
             let mut combined: Vec<Duration> = extra;
-            combined.push(normal_duration);
+            combined.push(baseline.duration);
             median_baseline = median_duration(&mut combined);
         }
     }
@@ -1127,14 +1138,84 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
     );
     let baseline_noisy = baseline_is_noisy(median_baseline, max_baseline);
 
-    #[allow(clippy::type_complexity)]
-    let mut vulnerability_info: Option<(
-        usize,
-        String,
-        VulnerabilityInfo,
-        Option<ControlObservation>,
-        Option<FollowupObservation>,
-    )> = None;
+    Ok(TimingContext {
+        baseline,
+        timing_threshold,
+        baseline_noisy,
+    })
+}
+
+/// Fallback probe, run only when the main loop found no direct anomaly and did
+/// not early-terminate. Catches CL.TE desyncs whose attack response is itself
+/// benign and only the FOLLOWING request on the shared upstream connection is
+/// corrupted. Returns a synthesized (benign-info) finding when the follow-up
+/// probes diverge from baseline, or `None` when there is no eligible plant
+/// payload or the follow-up probes stay clean.
+async fn attempt_second_request_desync(
+    params: &CheckParams<'_>,
+    baseline: &BaselineMeasurement,
+    timing_threshold: u128,
+) -> Option<VulnerabilityFinding> {
+    let (idx, plant_payload) = params
+        .attack_requests
+        .iter()
+        .enumerate()
+        .find(|(_, p)| payload_eligible_for_control(p))?;
+
+    let payload_params = PayloadCheckParams {
+        host: params.host,
+        port: params.port,
+        attack_request: plant_payload,
+        timeout: params.timeout,
+        verbose: params.verbose,
+        use_tls: params.use_tls,
+        timing_threshold,
+        baseline_status_codes: &baseline.observed_status_codes,
+    };
+    let followup = probe_second_request_desync(&payload_params, params.path, baseline).await?;
+
+    if params.verbose {
+        println!(
+            "  {} {} second-request desync detected: {}/{} follow-up probes diverged from baseline",
+            "[+]".green(),
+            params.check_name,
+            followup.diverging,
+            followup.total,
+        );
+    }
+    // The attack request itself carried no anomaly — synthesize a benign
+    // VulnerabilityInfo so the finding is reported as a medium-confidence
+    // second-request desync.
+    let info = VulnerabilityInfo {
+        status: baseline.status.clone(),
+        status_code: baseline.status_code,
+        duration: baseline.duration,
+        body_length: baseline.body_length,
+        header_fingerprint: ResponseHeaderFingerprint::default(),
+        is_connection_timeout: false,
+    };
+    Some((idx, plant_payload.clone(), info, None, Some(followup)))
+}
+
+pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult> {
+    let total_requests = params.attack_requests.len();
+
+    if !params.verbose {
+        params.pb.set_message(format!(
+            "[{}/{}] checking {} (0/{})",
+            params.current_check, params.total_checks, params.check_name, total_requests
+        ));
+    }
+
+    let TimingContext {
+        baseline,
+        timing_threshold,
+        baseline_noisy,
+    } = establish_timing_context(&params).await?;
+    let normal_status = baseline.status.clone();
+    let normal_duration = baseline.duration;
+
+    let mut vulnerability_info: Option<VulnerabilityFinding> = None;
 
     // Track consecutive control-FP rejections so we can abandon the check if
     // the backend produces the same shape-dependent anomaly for every
@@ -1277,52 +1358,10 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
     }
 
     // Second-request desync probe: only when the main loop found no direct
-    // anomaly and did not early-terminate. Catches CL.TE desyncs whose attack
-    // response is itself benign and only the FOLLOWING request on the shared
-    // upstream connection is corrupted.
-    if vulnerability_info.is_none()
-        && early_termination.is_none()
-        && let Some((idx, plant_payload)) = params
-            .attack_requests
-            .iter()
-            .enumerate()
-            .find(|(_, p)| payload_eligible_for_control(p))
-    {
-        let payload_params = PayloadCheckParams {
-            host: params.host,
-            port: params.port,
-            attack_request: plant_payload,
-            timeout: params.timeout,
-            verbose: params.verbose,
-            use_tls: params.use_tls,
-            timing_threshold,
-            baseline_status_codes: &baseline.observed_status_codes,
-        };
-        if let Some(followup) =
-            probe_second_request_desync(&payload_params, params.path, &baseline).await
-        {
-            if params.verbose {
-                println!(
-                    "  {} {} second-request desync detected: {}/{} follow-up probes diverged from baseline",
-                    "[+]".green(),
-                    params.check_name,
-                    followup.diverging,
-                    followup.total,
-                );
-            }
-            // The attack request itself carried no anomaly — synthesize a
-            // benign VulnerabilityInfo so the finding is reported as a
-            // medium-confidence second-request desync.
-            let info = VulnerabilityInfo {
-                status: normal_status.clone(),
-                status_code: baseline.status_code,
-                duration: normal_duration,
-                body_length: baseline.body_length,
-                header_fingerprint: ResponseHeaderFingerprint::default(),
-                is_connection_timeout: false,
-            };
-            vulnerability_info = Some((idx, plant_payload.clone(), info, None, Some(followup)));
-        }
+    // anomaly and did not early-terminate.
+    if vulnerability_info.is_none() && early_termination.is_none() {
+        vulnerability_info =
+            attempt_second_request_desync(&params, &baseline, timing_threshold).await;
     }
 
     let diagnostics: Vec<String> = early_termination.into_iter().collect();

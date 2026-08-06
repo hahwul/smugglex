@@ -53,6 +53,29 @@ pub struct CheckResult {
     pub diagnostics: Vec<String>,
 }
 
+impl CheckResult {
+    /// Placeholder result for a check that errored out before it could measure a
+    /// baseline (connection failure, TLS error, etc.). Reported as non-vulnerable
+    /// with the underlying error preserved as a `check_failed:` diagnostic so it
+    /// is never silently dropped from JSON output or the exit-code contract.
+    pub fn failed(check_type: &str, error: impl std::fmt::Display) -> Self {
+        CheckResult {
+            check_type: check_type.to_string(),
+            vulnerable: false,
+            payload_index: None,
+            normal_status: "CHECK_FAILED".to_string(),
+            attack_status: None,
+            normal_duration_ms: 0,
+            attack_duration_ms: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            payload: None,
+            confidence: None,
+            detection_signals: Vec::new(),
+            diagnostics: vec![format!("check_failed: {}", error)],
+        }
+    }
+}
+
 /// Fingerprint information for JSON output
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FingerprintInfo {
