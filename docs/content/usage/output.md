@@ -5,18 +5,29 @@ description = "Understanding smugglex output formats"
 
 ## Plain Text
 
-Default output format. Shows vulnerability status per check.
+Default output format. Timestamped log lines (`INF`/`WRN`/`ERR`) report progress, and each finding is printed as a detail block.
 
 ```bash
 smugglex https://target.com
 ```
 
 ```
-[VULNERABLE] CL.TE - https://target.com (payload #3)
-  Normal: 200 (45ms) | Attack: 200 (5023ms)
-[OK] TE.CL - https://target.com
-[OK] TE.TE - https://target.com
+09:15AM WRN smuggling found 1 vulnerability(ies)
+
+=== CL.TE Vulnerability Details ===
+Status: VULNERABLE (Confidence: High)
+Payload Index: 3
+Attack Response: 200
+Timing: Normal: 45ms, Attack: 5023ms
+Signals: timing-anomaly
+HTTP Raw Request:
+────────────────────────────────────────────────────────────
+POST / HTTP/1.1
+...
+────────────────────────────────────────────────────────────
 ```
+
+When nothing is found, smugglex logs `smuggling found 0 vulnerabilities`.
 
 ## JSON (Machine Readable)
 
@@ -35,7 +46,7 @@ Key properties for automation:
 
 ```json
 {
-  "smugglex_version": "0.2.0",
+  "smugglex_version": "0.3.0",
   "timestamp": "...",
   "results": [
     { "target": "...", "checks": [...] },
@@ -65,4 +76,4 @@ Save vulnerable payloads as raw HTTP requests for manual verification.
 smugglex --export-payloads ./payloads https://target.com
 ```
 
-Creates files like `payloads/cl-te-payload-3.txt` containing the raw HTTP request.
+Creates files named `<proto>_<host>_<check>_<index>.txt` — for example `payloads/https_target_com_cl-te_3.txt` — each containing the raw HTTP request.

@@ -25,10 +25,10 @@ echo "https://target.com" | smugglex -c cl-te,te-cl --fingerprint
 
 ## JSON Processing
 
-Pipe JSON output to jq for filtering:
+Pipe JSON output to jq for filtering. JSON mode always emits a batch envelope, so checks live under `.results[].checks[]`:
 
 ```bash
-smugglex -f json https://target.com | jq '.checks[] | select(.vulnerable)'
+smugglex -f json https://target.com | jq '.results[].checks[] | select(.vulnerable)'
 ```
 
 ## Through a Proxy
