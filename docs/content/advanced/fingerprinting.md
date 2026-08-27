@@ -25,9 +25,9 @@ Analyzes response headers (`Server`, `Via`, `X-Powered-By`, etc.) and behavior p
 {
   "fingerprint": {
     "detected_proxy": "cloudflare",
-    "server": "cloudflare",
-    "via": null,
-    "x_powered_by": null
+    "server_header": "cloudflare",
+    "via_header": null,
+    "powered_by": null
   }
 }
 ```

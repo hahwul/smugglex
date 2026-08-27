@@ -3,7 +3,7 @@ title = "Checks"
 description = "Smuggling techniques supported by smugglex"
 +++
 
-smugglex supports 6 types of HTTP Request Smuggling checks. Each exploits differences in how front-end and back-end servers parse HTTP requests.
+smugglex supports 7 types of HTTP Request Smuggling checks. Each exploits differences in how front-end and back-end servers parse HTTP requests.
 
 | Check | Description |
 |-------|-------------|
@@ -13,6 +13,7 @@ smugglex supports 6 types of HTTP Request Smuggling checks. Each exploits differ
 | [H2C](/checks/h2c/) | HTTP/2 Cleartext smuggling |
 | [H2](/checks/h2/) | HTTP/2 protocol smuggling |
 | [CL-Edge](/checks/cl-edge/) | Content-Length edge cases |
+| `h2-downgrade` | Real HTTP/2 (ALPN `h2`) H2.CL / H2.TE downgrade — HTTPS targets only |
 
 ## Run Specific Checks
 
@@ -22,4 +23,4 @@ smugglex -c cl-te,te-cl https://target.com
 
 ## Detection Method
 
-smugglex uses **timing-based detection**. It measures baseline response times, then sends smuggling payloads and compares. A significant delay (3x baseline or 1s+ minimum) indicates desynchronization.
+smugglex uses **timing-based detection**. It measures baseline response times, then sends smuggling payloads and compares. A response is flagged only when it is *both* well past the baseline — at least 3× the median (or the slowest baseline + 500 ms, whichever is larger) — *and* over 1 second, which indicates desynchronization.

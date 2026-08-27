@@ -20,10 +20,10 @@ description = "All CLI options for smugglex"
 | `--vhost` | | Virtual host for Host header |
 | `--raw-request` | | Read a raw HTTP request from a file and use it as the request template |
 | `--raw-request-proto` | https | Scheme for `--raw-request` when the request line is origin-form (`http` or `https`) |
-| `--cookies` | | Fetch and include cookies |
+| `--cookies` | | Fetch and append cookies from the initial request |
 | `-d, --delay` | 0 | Delay between requests in milliseconds |
 | `-j, --concurrency` | 1 | Number of URLs to scan concurrently |
-| `-x, --proxy` | | HTTP proxy URL (e.g., `http://127.0.0.1:8080`) |
+| `-x, --proxy` | | HTTP proxy URL for CONNECT tunneling, e.g. `http://127.0.0.1:8080` (SOCKS is not supported) |
 
 ## Detection
 
@@ -37,7 +37,9 @@ description = "All CLI options for smugglex"
 | `--max-payloads` | | Maximum payloads to test per check type |
 | `--baseline-count` | 3 | Number of baseline requests for timing measurement |
 
-Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`
+Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`, `h2-downgrade`
+
+`h2-downgrade` speaks real HTTP/2 (ALPN `h2`) to detect H2.CL / H2.TE and only runs on `https` targets; it connects directly and does not route through `--proxy`.
 
 ## Output
 
@@ -45,6 +47,7 @@ Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`
 |--------|---------|-------------|
 | `-o, --output` | | Save results to file |
 | `-f, --format` | plain | Output format: `plain` or `json` |
+| `--json` | | Shorthand for `--format json` (takes precedence over `-f`) |
 | `-V, --verbose` | | Enable detailed logging |
 | `-q, --quiet` | | Quiet mode (only show vulnerabilities) |
 | `--export-payloads` | | Export vulnerable payloads to directory |
@@ -62,6 +65,13 @@ Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`
 | `--reveal-param` | q | Reflected form parameter for reveal |
 
 Available exploits: `localhost-access`, `path-fuzz`, `smuggle`, `capture`, `reveal`
+
+## TLS
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-k, --insecure` | | Skip TLS certificate verification (allow self-signed certificates) |
+| `--cacert` | | Custom CA certificate file (PEM format) for self-signed/internal certificates |
 
 ## Examples
 
