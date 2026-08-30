@@ -302,6 +302,12 @@ fn connect_reply_ok(status_line: &str) -> bool {
     )
 }
 
+/// Upper bound on the bytes read while consuming an HTTP proxy's CONNECT
+/// response. A well-formed reply is a status line plus a handful of short
+/// headers; anything past this ceiling is a broken or hostile proxy, so the
+/// read stops rather than letting `read_line` grow its buffer without limit.
+const MAX_CONNECT_RESPONSE_BYTES: usize = 64 * 1024;
+
 /// Creates a stream through an HTTP proxy using CONNECT tunnel.
 async fn get_stream_via_proxy(
     host: &str,
@@ -337,8 +343,15 @@ async fn get_stream_via_proxy(
     );
     stream.write_all(connect_req.as_bytes()).await?;
 
-    // Read proxy response
-    let mut reader = BufReader::new(&mut stream);
+    // Read proxy response through a byte-limited adapter so a broken or hostile
+    // proxy cannot exhaust memory: `read_line` grows its buffer until it sees a
+    // newline, so a reply with an enormous line (or an endless stream of header
+    // lines) would otherwise balloon unbounded. `Take` caps the total bytes the
+    // reader will yield; once the cap is hit `read_line` returns 0 (like EOF)
+    // and the loops below terminate cleanly. 64 KiB is far beyond any real
+    // CONNECT response header block.
+    let mut limited = (&mut stream).take(MAX_CONNECT_RESPONSE_BYTES as u64);
+    let mut reader = BufReader::new(&mut limited);
     let mut status_line = String::new();
     reader.read_line(&mut status_line).await?;
 
@@ -349,14 +362,20 @@ async fn get_stream_via_proxy(
         )));
     }
 
-    // Consume remaining headers
+    // Consume remaining headers until the blank line, EOF, or the byte cap.
     loop {
         let mut line = String::new();
-        reader.read_line(&mut line).await?;
+        if reader.read_line(&mut line).await? == 0 {
+            break; // EOF or cap reached
+        }
         if line.trim().is_empty() {
             break;
         }
     }
+    // Release the borrow of `stream` before it is moved into the TLS handshake
+    // or the boxed return value below.
+    drop(reader);
+    drop(limited);
 
     // Now we have a tunnel; do TLS handshake if needed
     if use_tls {
@@ -479,6 +498,16 @@ fn response_complete_len(buf: &[u8]) -> Option<usize> {
     }
 }
 
+/// Upper bound on how large a single HTTP/1.x response buffer is allowed to
+/// grow while being read. Without a signalled length (`Connection: close`
+/// responses, or bytes that arrive before the header terminator) the read
+/// loops accumulate until the peer closes or the outer timeout fires; a fast
+/// hostile target on a low-latency link could push gigabytes inside that
+/// window and exhaust memory. Capping the buffer bounds that regardless of
+/// timing — the HTTP/2 path already does the equivalent via `MAX_FRAME_BYTES`.
+/// 32 MiB is far beyond any response this scanner needs to inspect.
+const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
 /// Read one complete HTTP/1.x response, carrying any bytes that belong to the
 /// *next* response in `carry` so the connection can be read again. This is what
 /// makes response-queue capture work: when a smuggled request's response arrives
@@ -503,6 +532,16 @@ async fn read_one_framed<S: AsyncRead + Unpin + ?Sized>(
             return Ok(Some(std::mem::take(carry)));
         }
         carry.extend_from_slice(&tmp[..n]);
+        // Bound memory: if the buffer exceeds the ceiling without a complete
+        // response, stop reading and surface what we have rather than growing
+        // unbounded against a hostile/misbehaving peer. For a >32 MiB response
+        // this truncates the tail (still queued on the socket), which can
+        // desync a subsequent pipelined read on the same connection — an
+        // accepted trade: bounded memory over exact framing of pathologically
+        // large responses, which this scanner never needs to inspect in full.
+        if carry.len() >= MAX_RESPONSE_BYTES {
+            return Ok(Some(std::mem::take(carry)));
+        }
     }
 }
 
@@ -548,6 +587,12 @@ async fn read_one_http_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -
         {
             header_end = Some(pos + 4);
             framing = detect_framing(&buf[..pos]);
+        }
+        // Bound memory: stop once the buffer hits the ceiling instead of
+        // accumulating without limit (e.g. a `Connection: close` stream, or a
+        // response advertising a huge/absent length) until the outer timeout.
+        if buf.len() >= MAX_RESPONSE_BYTES {
+            break;
         }
     }
     Ok(buf)
@@ -987,6 +1032,35 @@ kJ8CRz+khnaPy0Io4PLR\n\
         let mut slice: &[u8] = &data;
         let out = read_one_http_response(&mut slice).await.unwrap();
         assert!(out.starts_with(b"HTTP/1.1 200 OK"));
+    }
+
+    #[tokio::test]
+    async fn read_one_http_response_caps_unbounded_body() {
+        // A `Connection: close`-style response with no length signal frames as
+        // `ReadToClose`, so the read accumulates until EOF. Feed a body larger
+        // than the ceiling and confirm the read stops near the cap instead of
+        // consuming everything.
+        let mut data = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
+        data.extend(std::iter::repeat_n(b'A', MAX_RESPONSE_BYTES + 4096));
+        let mut slice: &[u8] = &data;
+        let out = read_one_http_response(&mut slice).await.unwrap();
+        assert!(out.len() >= MAX_RESPONSE_BYTES);
+        assert!(out.len() < data.len(), "buffer should be capped, not full");
+    }
+
+    #[tokio::test]
+    async fn read_one_framed_caps_unbounded_buffer() {
+        // A `ReadToClose` response is never "complete" until EOF, so without a
+        // ceiling `carry` would accumulate the whole stream. It must instead
+        // surface a capped buffer.
+        let mut data = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
+        data.extend(std::iter::repeat_n(b'A', MAX_RESPONSE_BYTES + 4096));
+        let mut slice: &[u8] = &data;
+        let mut carry = Vec::new();
+        let out = read_one_framed(&mut slice, &mut carry).await.unwrap();
+        let out = out.expect("capped buffer should be returned, not None");
+        assert!(out.len() >= MAX_RESPONSE_BYTES);
+        assert!(out.len() < data.len(), "buffer should be capped, not full");
     }
 
     #[tokio::test]
