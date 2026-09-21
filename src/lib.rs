@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod desync;
 pub mod error;
 pub mod exploit;
 pub mod fingerprint;
@@ -7,6 +8,7 @@ pub mod http2;
 pub mod model;
 pub mod mutator;
 pub mod output;
+pub mod parser;
 pub mod payloads;
 pub mod raw_request;
 pub mod scanner;

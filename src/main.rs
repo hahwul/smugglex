@@ -6,6 +6,7 @@ use std::time::Duration;
 use url::Url;
 
 use smugglex::cli::Cli;
+use smugglex::desync::{ConnectionDesyncParams, run_cl0_check, run_zero_cl_check};
 use smugglex::error::{Result, SmugglexError};
 use smugglex::exploit::{
     LocalhostAccessParams, PathFuzzParams, VulnerabilityContext, extract_vulnerability_context,
@@ -20,6 +21,7 @@ use smugglex::output::{
     build_batch_results, log_scan_results, print_batch_json, save_batch_to_file,
     save_scan_results_to_file,
 };
+use smugglex::parser::{ParserDiscrepancyParams, run_parser_discrepancy_check};
 use smugglex::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
     get_te_cl_payloads, get_te_te_payloads,
@@ -658,6 +660,26 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         Some(ref s) if s.split(',').any(|x| x.trim() == "h2-downgrade")
     );
     let h2_downgrade_selected = use_tls && (cli.checks.is_none() || h2_explicitly_requested);
+    // Parser discrepancy is intentionally opt-in: it repeats a small control
+    // corpus and is most useful as a focused audit after the faster payload
+    // families have been triaged.
+    let parser_discrepancy_selected = matches!(
+        cli.checks,
+        Some(ref s) if s.split(',').any(|x| x.trim() == "parser-discrepancy")
+    );
+    // CL.0 is intentionally opt-in because it deliberately reuses one
+    // connection for setup and follow-up requests and can affect connection
+    // state on intermediaries that do not isolate backend pools.
+    let cl0_selected = matches!(
+        cli.checks,
+        Some(ref s) if s.split(',').any(|x| x.trim() == "cl-0")
+    );
+    // 0.CL needs a two-phase HTTP/1.1 exchange (headers, early-response wait,
+    // then body) and is therefore also opt-in.
+    let zero_cl_selected = matches!(
+        cli.checks,
+        Some(ref s) if s.split(',').any(|x| x.trim() == "0-cl")
+    );
     if !is_machine() {
         if h2_explicitly_requested && !use_tls {
             log(
@@ -672,7 +694,11 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
             );
         }
     }
-    let total_checks = checks_to_run.len() + h2_downgrade_selected as usize;
+    let total_checks = checks_to_run.len()
+        + parser_discrepancy_selected as usize
+        + cl0_selected as usize
+        + zero_cl_selected as usize
+        + h2_downgrade_selected as usize;
 
     for (i, (check_name, payload_fn)) in checks_to_run.iter().enumerate() {
         if cli.exit_first && found_vulnerability {
@@ -734,6 +760,145 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         }
     }
 
+    if parser_discrepancy_selected && !(cli.exit_first && found_vulnerability) {
+        let current_check = checks_to_run.len() + 1;
+        if !cli.verbose && !is_machine() {
+            pb.set_message(format!(
+                "[{}/{}] checking parser-discrepancy",
+                current_check, total_checks
+            ));
+        }
+        let result = run_parser_discrepancy_check(ParserDiscrepancyParams {
+            pb: &pb,
+            host,
+            port,
+            path,
+            method: &cli.method,
+            use_tls,
+            custom_headers: &cli.headers,
+            cookies: &cookies,
+            timeout: cli.timeout,
+            verbose: network_verbose,
+            max_payloads: cli.max_payloads,
+            baseline_count: cli.baseline_count,
+            delay: cli.delay,
+            current_check,
+            total_checks,
+        })
+        .await;
+        match result {
+            Ok(result) => {
+                any_check_reachable |= !result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d == "parser_baseline_no_response");
+                found_vulnerability |= result.vulnerable;
+                results.push(result);
+            }
+            Err(error) => {
+                if !is_machine() {
+                    log(
+                        LogLevel::Warning,
+                        &format!("parser-discrepancy check failed: {error}"),
+                    );
+                }
+                results.push(CheckResult::failed("parser-discrepancy", error));
+            }
+        }
+        pb.inc(1);
+    }
+
+    if cl0_selected && !(cli.exit_first && found_vulnerability) {
+        let current_check = checks_to_run.len() + parser_discrepancy_selected as usize + 1;
+        if !cli.verbose && !is_machine() {
+            pb.set_message(format!(
+                "[{}/{}] checking cl-0",
+                current_check, total_checks
+            ));
+        }
+        let result = run_cl0_check(ConnectionDesyncParams {
+            pb: &pb,
+            host,
+            port,
+            authority: host_header,
+            path,
+            method: &cli.method,
+            custom_headers: &cli.headers,
+            cookies: &cookies,
+            timeout: cli.timeout,
+            verbose: network_verbose,
+            use_tls,
+            max_payloads: cli.max_payloads,
+            delay: cli.delay,
+            current_check,
+            total_checks,
+        })
+        .await;
+        match result {
+            Ok(result) => {
+                any_check_reachable |= !result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d == "cl0_baseline_no_response");
+                found_vulnerability |= result.vulnerable;
+                results.push(result);
+            }
+            Err(error) => {
+                if !is_machine() {
+                    log(LogLevel::Warning, &format!("cl-0 check failed: {error}"));
+                }
+                results.push(CheckResult::failed("cl-0", error));
+            }
+        }
+        pb.inc(1);
+    }
+
+    if zero_cl_selected && !(cli.exit_first && found_vulnerability) {
+        let current_check =
+            checks_to_run.len() + parser_discrepancy_selected as usize + cl0_selected as usize + 1;
+        if !cli.verbose && !is_machine() {
+            pb.set_message(format!(
+                "[{}/{}] checking 0-cl",
+                current_check, total_checks
+            ));
+        }
+        let result = run_zero_cl_check(ConnectionDesyncParams {
+            pb: &pb,
+            host,
+            port,
+            authority: host_header,
+            path,
+            method: &cli.method,
+            custom_headers: &cli.headers,
+            cookies: &cookies,
+            timeout: cli.timeout,
+            verbose: network_verbose,
+            use_tls,
+            max_payloads: cli.max_payloads,
+            delay: cli.delay,
+            current_check,
+            total_checks,
+        })
+        .await;
+        match result {
+            Ok(result) => {
+                any_check_reachable |= !result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d == "zero_cl_baseline_no_response");
+                found_vulnerability |= result.vulnerable;
+                results.push(result);
+            }
+            Err(error) => {
+                if !is_machine() {
+                    log(LogLevel::Warning, &format!("0-cl check failed: {error}"));
+                }
+                results.push(CheckResult::failed("0-cl", error));
+            }
+        }
+        pb.inc(1);
+    }
+
     // Real HTTP/2 downgrade smuggling (H2.CL / H2.TE) over ALPN h2. Runs after
     // the HTTP/1.1 checks because it uses a genuine HTTP/2 client rather than a
     // payload string.
@@ -741,17 +906,25 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         if !cli.verbose && !is_machine() {
             pb.set_message(format!(
                 "[{}/{}] checking h2-downgrade",
-                total_checks, total_checks
+                checks_to_run.len()
+                    + parser_discrepancy_selected as usize
+                    + cl0_selected as usize
+                    + zero_cl_selected as usize
+                    + 1,
+                total_checks
             ));
         }
-        let result = smugglex::http2::run_h2_downgrade_check(
+        let result = smugglex::http2::run_h2_downgrade_check(smugglex::http2::H2DowngradeParams {
             host,
             port,
-            host_header,
+            authority: host_header,
             path,
-            cli.timeout,
-            network_verbose,
-        )
+            method: &cli.method,
+            custom_headers: &cli.headers,
+            cookies: &cookies,
+            timeout: cli.timeout,
+            verbose: network_verbose,
+        })
         .await;
         found_vulnerability |= result.vulnerable;
         // The h2 check flags a failed handshake with this diagnostic; anything

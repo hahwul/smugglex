@@ -478,6 +478,7 @@ fn chunked_body_end(body: &[u8]) -> Option<usize> {
 }
 
 /// True once `body` holds a complete chunked message.
+#[cfg(test)]
 fn chunked_body_complete(body: &[u8]) -> bool {
     chunked_body_end(body).is_some()
 }
@@ -488,6 +489,13 @@ fn chunked_body_complete(body: &[u8]) -> bool {
 fn response_complete_len(buf: &[u8]) -> Option<usize> {
     let pos = find_subsequence(buf, b"\r\n\r\n")?;
     let header_end = pos + 4;
+    // Informational responses, especially `100 Continue`, terminate at the
+    // header block and do not carry the final response body.  Treating them as
+    // read-to-close would make an Expect-based probe wait until the socket
+    // timeout and lose the opportunity to send the request body.
+    if is_interim_response(&buf[..pos]) {
+        return Some(header_end);
+    }
     match detect_framing(&buf[..pos]) {
         BodyFraming::ContentLength(n) => {
             let total = header_end.checked_add(n)?;
@@ -496,6 +504,15 @@ fn response_complete_len(buf: &[u8]) -> Option<usize> {
         BodyFraming::Chunked => chunked_body_end(&buf[header_end..]).map(|l| header_end + l),
         BodyFraming::ReadToClose => None,
     }
+}
+
+fn is_interim_response(header_block: &[u8]) -> bool {
+    let header = String::from_utf8_lossy(header_block);
+    let status_line = header.lines().next().unwrap_or_default();
+    matches!(
+        crate::utils::parse_status_code(status_line),
+        Some(100..=199) if !matches!(crate::utils::parse_status_code(status_line), Some(101))
+    )
 }
 
 /// Upper bound on how large a single HTTP/1.x response buffer is allowed to
@@ -550,6 +567,7 @@ async fn read_one_framed<S: AsyncRead + Unpin + ?Sized>(
 /// than waiting for EOF. This lets the connection be reused for the next request
 /// (pipelining) and avoids blocking on keep-alive idle time. `?Sized` so trait
 /// objects (the boxed TLS/TCP stream) can be passed by `&mut`.
+#[cfg(test)]
 async fn read_one_http_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -> Result<Vec<u8>> {
     let mut buf: Vec<u8> = Vec::with_capacity(8192);
     let mut tmp = [0u8; 8192];
@@ -596,6 +614,22 @@ async fn read_one_http_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -
         }
     }
     Ok(buf)
+}
+
+/// Read one final response, discarding any informational responses that
+/// precede it (for example `100 Continue`). This is used by the ordinary
+/// request path when a caller supplied an Expect header; the dedicated
+/// two-phase probe keeps those interim responses instead.
+async fn read_one_final_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -> Result<Vec<u8>> {
+    let mut carry = Vec::new();
+    loop {
+        let Some(response) = read_one_framed(stream, &mut carry).await? else {
+            return Ok(Vec::new());
+        };
+        if !is_interim_response(&response) {
+            return Ok(response);
+        }
+    }
 }
 
 /// Send several requests over a *single* persistent connection, reading one
@@ -664,6 +698,230 @@ pub async fn pipeline_requests(
         .collect())
 }
 
+/// Result of an Expect-based, two-phase HTTP/1.1 exchange.
+///
+/// `early_response` is a final (non-1xx) response received after the headers
+/// but before the body was written. `post_body_responses` contains up to two
+/// final responses observed after the body and follow-up request were sent.
+/// This shape is sufficient to distinguish a normal 100-continue exchange from
+/// a 0.CL response-queue shift without exposing the stream implementation.
+#[derive(Debug, Default)]
+pub struct ExpectContinueResult {
+    /// Final response received before the request body was sent.
+    pub early_response: Option<String>,
+    /// Informational responses such as `100 Continue`.
+    pub interim_responses: Vec<String>,
+    /// Final responses received after the body and follow-up were written.
+    pub post_body_responses: Vec<String>,
+    /// Whether the body write completed successfully.
+    pub body_sent: bool,
+    /// Whether the exchange hit its overall timeout while waiting for data.
+    pub timed_out: bool,
+    /// Non-fatal transport error after the connection was established.
+    pub transport_error: Option<String>,
+    /// Total duration of the exchange.
+    pub duration: Duration,
+}
+
+/// Parameters for [`expect_continue_sequence`].
+pub struct ExpectContinueParams<'a> {
+    /// Target hostname.
+    pub host: &'a str,
+    /// Target port.
+    pub port: u16,
+    /// Request headers including the terminating blank line.
+    pub headers: &'a str,
+    /// Request body sent after the early-response wait.
+    pub body: &'a str,
+    /// Follow-up request written immediately after the body.
+    pub followup: &'a str,
+    /// Maximum wait for a preliminary response.
+    pub early_wait: Duration,
+    /// Overall exchange timeout in seconds.
+    pub timeout: u64,
+    /// Whether to print raw exchange data.
+    pub verbose: bool,
+    /// Whether to use TLS.
+    pub use_tls: bool,
+}
+
+/// Send an HTTP/1.1 request in two phases: headers first, then body plus a
+/// follow-up request. The short wait between phases lets a scanner observe an
+/// early non-100 response produced by a broken `Expect`/Content-Length path.
+///
+/// The function intentionally returns partial observations for post-connect
+/// timeouts and resets. That is useful for desync diagnostics and avoids
+/// discarding an early response merely because the follow-up connection later
+/// stalled. Connection-establishment failures remain ordinary `Err` results.
+pub async fn expect_continue_sequence(
+    params: ExpectContinueParams<'_>,
+) -> Result<ExpectContinueResult> {
+    let started = Instant::now();
+    let timeout_duration = Duration::from_secs(params.timeout);
+    let mut stream = match tokio::time::timeout(
+        timeout_duration,
+        get_stream(params.host, params.port, params.use_tls),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => return Err(SmugglexError::Timeout("request timed out".to_string())),
+    };
+
+    let mut result = ExpectContinueResult::default();
+    let mut carry = Vec::new();
+    let deadline = Instant::now() + timeout_duration;
+
+    if params.verbose {
+        println!("\n{}", "--- EXPECT HEADERS ---".bold().blue());
+        println!("{}", params.headers.cyan());
+    }
+    let Some(remaining) = remaining_until(deadline) else {
+        result.timed_out = true;
+        result.duration = started.elapsed();
+        return Ok(result);
+    };
+    match tokio::time::timeout(remaining, stream.write_all(params.headers.as_bytes())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            result.transport_error = Some(error.to_string());
+            result.duration = started.elapsed();
+            return Ok(result);
+        }
+        Err(_) => {
+            result.timed_out = true;
+            result.duration = started.elapsed();
+            return Ok(result);
+        }
+    }
+
+    // Wait only for an early response. If a valid 100 Continue arrives, the
+    // body is sent immediately; if nothing arrives, the client-side wait
+    // expires and the body is sent as well.
+    let early_deadline = std::cmp::min(deadline, Instant::now() + params.early_wait);
+    while let Some(remaining) = remaining_until(early_deadline) {
+        match tokio::time::timeout(remaining, read_one_framed(&mut *stream, &mut carry)).await {
+            Ok(Ok(Some(response))) => {
+                if is_interim_response(&response) {
+                    result.interim_responses.push(bytes_to_string(response));
+                    // 100 Continue is the protocol's explicit permission to
+                    // send the body. Other 1xx responses remain interim, but
+                    // we continue waiting within the early-response window.
+                    if result
+                        .interim_responses
+                        .last()
+                        .and_then(|r| r.lines().next())
+                        .and_then(crate::utils::parse_status_code)
+                        == Some(100)
+                    {
+                        break;
+                    }
+                } else {
+                    result.early_response = Some(bytes_to_string(response));
+                    break;
+                }
+            }
+            Ok(Ok(None)) => {
+                result.transport_error = Some("connection closed before body".to_string());
+                result.duration = started.elapsed();
+                return Ok(result);
+            }
+            Ok(Err(error)) => {
+                result.transport_error = Some(error.to_string());
+                result.duration = started.elapsed();
+                return Ok(result);
+            }
+            Err(_) => break,
+        }
+    }
+
+    if params.verbose {
+        println!("\n{}", "--- EXPECT BODY ---".bold().blue());
+        println!("{}", params.body.cyan());
+        println!("\n{}", "--- EXPECT FOLLOW-UP ---".bold().blue());
+        println!("{}", params.followup.cyan());
+    }
+    let Some(remaining) = remaining_until(deadline) else {
+        result.timed_out = true;
+        result.duration = started.elapsed();
+        return Ok(result);
+    };
+    match tokio::time::timeout(remaining, stream.write_all(params.body.as_bytes())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            result.transport_error = Some(error.to_string());
+            result.duration = started.elapsed();
+            return Ok(result);
+        }
+        Err(_) => {
+            result.timed_out = true;
+            result.duration = started.elapsed();
+            return Ok(result);
+        }
+    }
+    let Some(remaining) = remaining_until(deadline) else {
+        result.timed_out = true;
+        result.duration = started.elapsed();
+        return Ok(result);
+    };
+    match tokio::time::timeout(remaining, stream.write_all(params.followup.as_bytes())).await {
+        Ok(Ok(())) => result.body_sent = true,
+        Ok(Err(error)) => {
+            result.transport_error = Some(error.to_string());
+            result.duration = started.elapsed();
+            return Ok(result);
+        }
+        Err(_) => {
+            result.timed_out = true;
+            result.duration = started.elapsed();
+            return Ok(result);
+        }
+    }
+
+    // At most two final responses are relevant here: the setup/body response
+    // and the explicit follow-up. Stop after those so a healthy keep-alive
+    // server is not held open until the global timeout.
+    while result.post_body_responses.len() < 2 {
+        let Some(remaining) = remaining_until(deadline) else {
+            result.timed_out = true;
+            break;
+        };
+        match tokio::time::timeout(remaining, read_one_framed(&mut *stream, &mut carry)).await {
+            Ok(Ok(Some(response))) => {
+                if is_interim_response(&response) {
+                    result.interim_responses.push(bytes_to_string(response));
+                } else {
+                    result.post_body_responses.push(bytes_to_string(response));
+                }
+            }
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
+                result.transport_error = Some(error.to_string());
+                break;
+            }
+            Err(_) => {
+                result.timed_out = true;
+                break;
+            }
+        }
+    }
+
+    result.duration = started.elapsed();
+    Ok(result)
+}
+
+fn remaining_until(deadline: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    (remaining > Duration::ZERO).then_some(remaining)
+}
+
+fn bytes_to_string(bytes: Vec<u8>) -> String {
+    match String::from_utf8(bytes) {
+        Ok(value) => value,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    }
+}
+
 /// Sends a raw HTTP request and returns the response and duration.
 pub async fn send_request(
     host: &str,
@@ -684,8 +942,9 @@ pub async fn send_request(
     let result = tokio::time::timeout(timeout_dur, async {
         let mut stream = get_stream(host, port, use_tls).await?;
         stream.write_all(request.as_bytes()).await?;
-        // Read exactly one complete HTTP/1.x response (see read_one_http_response).
-        read_one_http_response(&mut *stream).await
+        // Read exactly one final HTTP/1.x response, skipping informational
+        // responses such as 100 Continue.
+        read_one_final_response(&mut *stream).await
     })
     .await??;
 
@@ -1003,6 +1262,13 @@ kJ8CRz+khnaPy0Io4PLR\n\
     }
 
     #[test]
+    fn response_complete_len_interim_100_stops_at_headers() {
+        let buf = b"HTTP/1.1 100 Continue\r\n\r\n";
+        assert_eq!(response_complete_len(buf), Some(buf.len()));
+        assert!(is_interim_response(buf));
+    }
+
+    #[test]
     fn response_complete_len_chunked_with_trailers() {
         let buf = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nX-T: 1\r\n\r\n";
         assert_eq!(response_complete_len(buf), Some(buf.len()));
@@ -1032,6 +1298,14 @@ kJ8CRz+khnaPy0Io4PLR\n\
         let mut slice: &[u8] = &data;
         let out = read_one_http_response(&mut slice).await.unwrap();
         assert!(out.starts_with(b"HTTP/1.1 200 OK"));
+    }
+
+    #[tokio::test]
+    async fn read_one_final_response_skips_informational_response() {
+        let data = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+        let mut slice: &[u8] = data;
+        let out = read_one_final_response(&mut slice).await.unwrap();
+        assert_eq!(out, &data[b"HTTP/1.1 100 Continue\r\n\r\n".len()..]);
     }
 
     #[tokio::test]

@@ -7,16 +7,20 @@ use std::fmt;
 /// (anything other than this default) before warning about a conflict.
 pub const DEFAULT_METHOD: &str = "POST";
 
-/// Every check name smugglex understands: the payload-string checks plus the
+/// Every check name smugglex understands: the payload-string checks, the CL.0
+/// connection-sequence probes, the parser discrepancy audit, plus the
 /// real-HTTP/2 downgrade check. Used to validate `--checks` so a typo does not
 /// silently run zero checks and report a clean target.
-pub const KNOWN_CHECK_NAMES: [&str; 7] = [
+pub const KNOWN_CHECK_NAMES: [&str; 10] = [
     "cl-te",
     "te-cl",
     "te-te",
     "h2c",
     "h2",
     "cl-edge",
+    "cl-0",
+    "0-cl",
+    "parser-discrepancy",
     "h2-downgrade",
 ];
 
@@ -148,8 +152,11 @@ pub struct Cli {
     #[arg(help_heading = "OUTPUT", short = 'V', long, action = clap::ArgAction::SetTrue)]
     pub verbose: bool,
 
-    /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te,h2c,h2,cl-edge,h2-downgrade).
+    /// Specify which checks to run (comma-separated: cl-te,te-cl,te-te,h2c,h2,cl-edge,cl-0,0-cl,parser-discrepancy,h2-downgrade).
     /// h2-downgrade speaks real HTTP/2 (ALPN h2) to detect H2.CL/H2.TE and runs only on https targets.
+    /// cl-0 performs a same-connection response-queue probe and is opt-in because it is stateful.
+    /// 0-cl uses an Expect/body pause probe and is opt-in because it is stateful.
+    /// parser-discrepancy performs a focused control-vs-probe response comparison and is opt-in.
     #[arg(help_heading = "DETECT", short = 'c', long = "checks")]
     pub checks: Option<String>,
 

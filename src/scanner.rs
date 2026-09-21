@@ -445,7 +445,7 @@ const CONTROL_BODY_MAX_BYTES: usize = 4096;
 /// All other headers (Host, Cookie, custom headers, Connection, etc.) are
 /// preserved so the backend processes a request shaped as closely as possible
 /// to the attack minus the smuggling-specific bits.
-fn build_control_request(payload: &str) -> String {
+pub(crate) fn build_control_request(payload: &str) -> String {
     let (head, original_body) = match payload.find("\r\n\r\n") {
         Some(idx) => (&payload[..idx], &payload[idx + 4..]),
         None => (payload, ""),
