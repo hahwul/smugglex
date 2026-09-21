@@ -37,9 +37,15 @@ description = "All CLI options for smugglex"
 | `--max-payloads` | | Maximum payloads to test per check type |
 | `--baseline-count` | 3 | Number of baseline requests for timing measurement |
 
-Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`, `h2-downgrade`
+Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`, `cl-0`, `0-cl`, `parser-discrepancy`, `h2-downgrade`
+
+`cl-0` is an opt-in same-connection response-queue probe. It requires a control sequence and repeated response shift before reporting a finding.
+
+`0-cl` is an opt-in `Expect: 100-continue`/body-pause probe. It reports only when an early response and a reproducible post-body response-queue change are both observed; a deadlock alone is recorded as a diagnostic.
 
 `h2-downgrade` speaks real HTTP/2 (ALPN `h2`) to detect H2.CL / H2.TE and only runs on `https` targets; it connects directly and does not route through `--proxy`.
+
+`parser-discrepancy` is an opt-in differential audit. It compares a bounded corpus of CL/TE probes with framing-stripped controls and records status/body/timeout differences in JSON diagnostics; only repeatable timeout-backed differences are promoted to a vulnerability.
 
 ## Output
 

@@ -6,7 +6,7 @@
 //! - Timeout behavior
 //! - Error handling for connection failures
 
-use smugglex::http::send_request;
+use smugglex::http::{ExpectContinueParams, expect_continue_sequence, send_request};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -246,4 +246,72 @@ async fn test_pipeline_requests_preserves_responses_on_timeout() {
     );
     assert!(responses[0].contains("HTTP/1.1 200 OK"));
     assert!(responses[0].contains("AB"));
+}
+
+#[tokio::test]
+async fn test_expect_continue_sequence_handles_interim_and_queued_responses() {
+    let port = 8086;
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
+        if let Ok((mut socket, _)) = listener.accept().await {
+            // The client must stop after the header block and wait for 100
+            // Continue before writing the body.
+            let mut received = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !received.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    return;
+                }
+                received.extend_from_slice(&chunk[..n]);
+            }
+            assert!(String::from_utf8_lossy(&received).contains("Expect: 100-continue"));
+            socket
+                .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                .await
+                .unwrap();
+
+            // Body and follow-up are written back-to-back by the client. Wait
+            // until the follow-up request line arrives before returning two
+            // framed responses in one socket write.
+            received.clear();
+            while !received.windows(14).any(|w| w == b"GET /followup ") {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    return;
+                }
+                received.extend_from_slice(&chunk[..n]);
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nHTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        }
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let result = expect_continue_sequence(ExpectContinueParams {
+        host: "127.0.0.1",
+        port,
+        headers: "POST /submit HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\nContent-Length: 3\r\n\r\n",
+        body: "ABC",
+        followup: "GET /followup HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        early_wait: Duration::from_millis(250),
+        timeout: 2,
+        verbose: false,
+        use_tls: false,
+    })
+    .await
+    .unwrap();
+
+    assert!(result.body_sent);
+    assert!(!result.timed_out);
+    assert_eq!(result.interim_responses.len(), 1);
+    assert_eq!(result.post_body_responses.len(), 2);
+    assert!(result.post_body_responses[0].contains("200 OK"));
+    assert!(result.post_body_responses[1].contains("404 Not Found"));
 }
