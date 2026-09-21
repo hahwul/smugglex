@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.96.0-alpine3.22 AS chef
+FROM rust:1.98.0-alpine3.22 AS chef
 
 WORKDIR /usr/src/project
 
@@ -21,7 +21,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 # Create a non-root user and group
 RUN addgroup -S app && adduser -S -G app app
