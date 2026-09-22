@@ -11,6 +11,103 @@
 
 use smugglex::model::CheckResult;
 use smugglex::payloads::*;
+
+// The CL.TE/TE.CL/TE.TE families and `get_te_header_variations` now return raw
+// request bytes (`Vec<Vec<u8>>`) so their extended-ASCII TE obfuscations reach
+// the wire verbatim. These same-named shims shadow the glob-imported byte
+// generators and render each payload as a (lossy) `String`, so the existing
+// substring-based assertions below keep working unchanged. The extended-ASCII
+// bytes render as U+FFFD in this textual view — the byte-level guarantees are
+// covered by unit tests in `src/payloads/te_variations.rs`.
+fn lossy_payloads(payloads: Vec<Vec<u8>>) -> Vec<String> {
+    payloads
+        .into_iter()
+        .map(|p| String::from_utf8_lossy(&p).into_owned())
+        .collect()
+}
+
+fn get_cl_te_payloads(
+    path: &str,
+    host: &str,
+    method: &str,
+    custom_headers: &[String],
+    cookies: &[String],
+) -> Vec<String> {
+    lossy_payloads(smugglex::payloads::get_cl_te_payloads(
+        path,
+        host,
+        method,
+        custom_headers,
+        cookies,
+    ))
+}
+
+fn get_te_cl_payloads(
+    path: &str,
+    host: &str,
+    method: &str,
+    custom_headers: &[String],
+    cookies: &[String],
+) -> Vec<String> {
+    lossy_payloads(smugglex::payloads::get_te_cl_payloads(
+        path,
+        host,
+        method,
+        custom_headers,
+        cookies,
+    ))
+}
+
+fn get_te_te_payloads(
+    path: &str,
+    host: &str,
+    method: &str,
+    custom_headers: &[String],
+    cookies: &[String],
+) -> Vec<String> {
+    lossy_payloads(smugglex::payloads::get_te_te_payloads(
+        path,
+        host,
+        method,
+        custom_headers,
+        cookies,
+    ))
+}
+
+fn get_te_header_variations() -> Vec<String> {
+    lossy_payloads(smugglex::payloads::get_te_header_variations())
+}
+
+/// Regression test for the extended-ASCII TE-obfuscation bug: the assembled
+/// CL.TE and TE.CL requests must carry the raw obfuscation bytes (NEL 0x85,
+/// NBSP 0xA0, soft-hyphen 0xAD, …) verbatim, never the U+FFFD replacement
+/// sequence (`EF BF BD`) that `String::from_utf8_lossy` used to emit — which
+/// meant the intended byte never reached the wire. Uses the real byte generators
+/// (not the lossy shims above).
+#[test]
+fn extended_ascii_te_obfuscations_reach_the_payload_as_raw_bytes() {
+    let replacement: &[u8] = &[0xEF, 0xBF, 0xBD];
+    for family in [
+        smugglex::payloads::get_cl_te_payloads("/", "h.test", "POST", &[], &[]),
+        smugglex::payloads::get_te_cl_payloads("/", "h.test", "POST", &[], &[]),
+    ] {
+        // No assembled request may contain the U+FFFD replacement bytes.
+        assert!(
+            family
+                .iter()
+                .all(|p| !p.windows(3).any(|w| w == replacement)),
+            "an assembled payload contained U+FFFD instead of the raw obfuscation byte"
+        );
+        // Every extended-ASCII byte must appear verbatim in some payload.
+        for raw in [0x85u8, 0xA0, 0xAD, 0xFF, 0x82, 0x96] {
+            assert!(
+                family.iter().any(|p| p.contains(&raw)),
+                "raw obfuscation byte {raw:#04x} is missing from the assembled payloads"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_cl_te_payloads_generation() {
     let payloads = get_cl_te_payloads("/test", "example.com", "POST", &[], &[]);

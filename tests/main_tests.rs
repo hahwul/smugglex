@@ -601,7 +601,14 @@ async fn test_payload_export_path_creation() {
     let export_dir = temp_dir.to_str().unwrap();
 
     let payload = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
-    let result = export_payload(export_dir, "example.com", "CL.TE", 0, payload, false);
+    let result = export_payload(
+        export_dir,
+        "example.com",
+        "CL.TE",
+        0,
+        payload.as_bytes(),
+        false,
+    );
 
     assert!(result.is_ok());
 

@@ -510,7 +510,10 @@ async fn test_run_checks_for_type_not_vulnerable() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -550,7 +553,10 @@ async fn test_run_checks_for_type_vulnerable_timeout_status() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -591,7 +597,10 @@ async fn test_run_checks_for_type_vulnerable_timing() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -638,7 +647,10 @@ async fn test_run_checks_for_type_multiple_payloads() {
         host: &host,
         port,
         path: "/test",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -679,7 +691,10 @@ async fn test_run_checks_for_type_with_export_dir() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -719,7 +734,10 @@ async fn test_run_checks_for_type_verbose_mode() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: true, // Test verbose mode
         use_tls: false,
@@ -756,7 +774,10 @@ async fn test_run_checks_for_type_with_custom_path() {
         host: &host,
         port,
         path: "/api/v1/test",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -788,7 +809,10 @@ async fn test_run_checks_for_type_empty_payloads() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -825,7 +849,10 @@ async fn test_run_checks_for_type_different_check_names() {
             host: &host,
             port,
             path: "/",
-            attack_requests,
+            attack_requests: attack_requests
+                .into_iter()
+                .map(String::into_bytes)
+                .collect(),
             timeout: 5,
             verbose: false,
             use_tls: false,
@@ -886,7 +913,10 @@ async fn test_run_checks_for_type_408_status_code() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -974,7 +1004,10 @@ async fn test_flaky_504_not_confirmed() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1034,7 +1067,10 @@ async fn test_baseline_504_not_flagged() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1104,7 +1140,10 @@ async fn test_connection_timeout_strict_confirmation() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1175,7 +1214,10 @@ async fn test_confirmed_vulnerability_high_confidence() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1248,7 +1290,10 @@ async fn test_confirmed_vulnerability_medium_confidence() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1321,7 +1366,10 @@ async fn test_single_baseline_504_does_not_disable_signal() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1359,7 +1407,10 @@ async fn test_baseline_count_zero_does_not_panic() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1429,7 +1480,10 @@ async fn test_minority_confirmation_not_flagged() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1546,7 +1600,10 @@ async fn test_uniform_slow_backend_rejected_via_control() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1587,7 +1644,10 @@ async fn test_te_specific_slow_backend_still_detected() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1656,7 +1716,10 @@ async fn test_noisy_baseline_suppresses_borderline_attack() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1748,7 +1811,10 @@ async fn test_body_divergence_overrides_control_timing_similarity() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1822,7 +1888,10 @@ async fn test_method_matched_baseline_suppresses_post_only_slowness() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -1906,7 +1975,10 @@ async fn test_consecutive_fp_rejections_short_circuit_check() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 6,
         verbose: false,
         use_tls: false,
@@ -2028,7 +2100,10 @@ async fn test_followup_divergence_signal_recorded() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,
@@ -2075,7 +2150,10 @@ async fn test_detection_signals_populated_for_timing_only() {
         host: &host,
         port,
         path: "/",
-        attack_requests,
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
         timeout: 5,
         verbose: false,
         use_tls: false,

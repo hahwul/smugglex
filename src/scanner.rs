@@ -1,5 +1,5 @@
 use crate::error::{Result, SmugglexError};
-use crate::http::send_request;
+use crate::http::{send_request, send_request_bytes};
 use crate::model::{CheckResult, Confidence};
 use crate::utils::{export_payload, parse_status_code};
 use chrono::Utc;
@@ -65,7 +65,7 @@ pub struct CheckParams<'a> {
     /// Request path on the target
     pub path: &'a str,
     /// List of raw HTTP attack payloads to test
-    pub attack_requests: Vec<String>,
+    pub attack_requests: Vec<Vec<u8>>,
     /// Socket timeout in seconds
     pub timeout: u64,
     /// Whether to print verbose debug output
@@ -195,10 +195,12 @@ fn median_duration(durations: &mut [Duration]) -> Duration {
 }
 
 /// Extract the HTTP method (first whitespace-delimited token of the first line)
-/// from a raw request payload. Returns uppercased method.
-fn payload_method(payload: &str) -> String {
-    payload
-        .lines()
+/// from a raw request payload. Returns uppercased method. Accepts raw bytes
+/// because a payload may carry non-UTF-8 obfuscation bytes; the method token is
+/// ASCII, so a lossy view suffices to read it.
+fn payload_method(payload: &[u8]) -> String {
+    let text = String::from_utf8_lossy(payload);
+    text.lines()
         .next()
         .and_then(|l| l.split_whitespace().next())
         .map(|m| m.to_ascii_uppercase())
@@ -322,7 +324,7 @@ fn aggregate_baseline(results: Vec<Result<(String, Duration)>>) -> Result<Baseli
 struct PayloadCheckParams<'a> {
     host: &'a str,
     port: u16,
-    attack_request: &'a str,
+    attack_request: &'a [u8],
     timeout: u64,
     verbose: bool,
     use_tls: bool,
@@ -333,7 +335,7 @@ struct PayloadCheckParams<'a> {
 async fn check_single_payload(
     params: &PayloadCheckParams<'_>,
 ) -> Result<Option<VulnerabilityInfo>> {
-    match send_request(
+    match send_request_bytes(
         params.host,
         params.port,
         params.attack_request,
@@ -409,9 +411,10 @@ struct ControlObservation {
 /// comparison knows how to strip. Plain HTTP requests (no TE artifact) and
 /// Upgrade/HTTP-2-shaped payloads are excluded because stripping wouldn't
 /// produce a meaningful control.
-fn payload_eligible_for_control(payload: &str) -> bool {
-    let head_end = payload.find("\r\n\r\n").unwrap_or(payload.len());
-    let head_lower = payload[..head_end].to_ascii_lowercase();
+fn payload_eligible_for_control(payload: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(payload);
+    let head_end = text.find("\r\n\r\n").unwrap_or(text.len());
+    let head_lower = text[..head_end].to_ascii_lowercase();
 
     // Skip Upgrade-based / HTTP/2-shaped payloads — stripping TE does not
     // disable the H2C/H2 smuggling vector, so a control would not be a
@@ -445,11 +448,26 @@ const CONTROL_BODY_MAX_BYTES: usize = 4096;
 /// All other headers (Host, Cookie, custom headers, Connection, etc.) are
 /// preserved so the backend processes a request shaped as closely as possible
 /// to the attack minus the smuggling-specific bits.
-pub(crate) fn build_control_request(payload: &str) -> String {
-    let (head, original_body) = match payload.find("\r\n\r\n") {
-        Some(idx) => (&payload[..idx], &payload[idx + 4..]),
-        None => (payload, ""),
+pub(crate) fn build_control_request(payload: &[u8]) -> String {
+    // The control request is always pure ASCII (it strips the smuggling-specific
+    // headers and re-emits a benign body), so a lossy view of the attack payload
+    // is sufficient to read its headers even when the payload carries raw
+    // obfuscation bytes.
+    let text = String::from_utf8_lossy(payload);
+    let head = match text.find("\r\n\r\n") {
+        Some(idx) => &text[..idx],
+        None => text.as_ref(),
     };
+    // Measure the body length from the RAW bytes, not the lossy view: a non-ASCII
+    // body byte renders as the 3-byte U+FFFD sequence in `text`, which would
+    // inflate the control's Content-Length and skew the body-divergence FP
+    // comparison. (Today's payloads have ASCII bodies, so this is hardening
+    // against a future extended-ASCII body.)
+    let original_body_len = payload
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|idx| payload.len() - (idx + 4))
+        .unwrap_or(0);
 
     let mut kept: Vec<&str> = Vec::new();
     for (i, line) in head.lines().enumerate() {
@@ -471,7 +489,7 @@ pub(crate) fn build_control_request(payload: &str) -> String {
     // Match the original body size (capped) with benign ASCII padding so the
     // backend takes the same shape-conditional code paths it would for the
     // attack, minus the smuggling tricks.
-    let body_len = original_body.len().min(CONTROL_BODY_MAX_BYTES);
+    let body_len = original_body_len.min(CONTROL_BODY_MAX_BYTES);
     let mut result = String::with_capacity(payload.len());
     for line in kept {
         result.push_str(line);
@@ -642,12 +660,18 @@ async fn observe_followup_divergence(
                     diverging += 1;
                 }
             }
-            // Network-level errors on a fresh follow-up connection can themselves
-            // be a desync signal (backend tearing down poisoned connections),
-            // but they're also noisy. Count them but do not over-weight.
+            // A follow-up *timeout* is counted toward the total (a probe was
+            // sent and observed) but NOT toward divergence. On a uniformly slow
+            // backend every follow-up times out; counting those as divergence
+            // would let `has_corroborated_divergence` (a majority rule) trip and
+            // override the control-based false-positive verdict — promoting a
+            // merely-slow backend to a confirmed finding, exactly the population
+            // the control check exists to reject. Counting it toward the total
+            // only makes it *harder* to reach the divergence majority, which is
+            // the conservative choice, and mirrors
+            // `count_structural_followup_divergence`, which ignores timeouts.
             Err(SmugglexError::Timeout(_)) => {
                 total += 1;
-                diverging += 1;
             }
             Err(_) => {
                 // Other connection errors aren't reliable signals — skip.
@@ -668,7 +692,12 @@ async fn observe_followup_divergence(
 /// second-request probe from firing on transient upstream errors.
 fn followup_status_diverged(status_code: Option<u16>, baseline_status: Option<u16>) -> bool {
     match status_code {
-        Some(c) if c < 500 => status_code != baseline_status,
+        // A divergence can only be established against a *known* baseline. If the
+        // baseline status was unparseable (`None`), a follow-up that merely parses
+        // (e.g. a normal `200`) must not be treated as diverged — otherwise every
+        // clean follow-up would look like a shift and trivially corroborate a
+        // false positive.
+        Some(c) if c < 500 => baseline_status.is_some() && status_code != baseline_status,
         _ => false,
     }
 }
@@ -743,7 +772,7 @@ async fn probe_second_request_desync(
         // Plant: send the smuggling payload to corrupt the shared upstream
         // connection. Its own response is irrelevant here — the main loop has
         // already established it carries no direct anomaly.
-        let _ = send_request(
+        let _ = send_request_bytes(
             params.host,
             params.port,
             params.attack_request,
@@ -1003,7 +1032,7 @@ fn build_check_result(
     normal_duration: Duration,
     vulnerability: Option<(
         usize,
-        String,
+        Vec<u8>,
         VulnerabilityInfo,
         Option<ControlObservation>,
         Option<FollowupObservation>,
@@ -1011,7 +1040,7 @@ fn build_check_result(
     timing_threshold: u128,
     baseline_noisy: bool,
     diagnostics: Vec<String>,
-) -> (CheckResult, Option<(usize, String)>) {
+) -> (CheckResult, Option<(usize, Vec<u8>)>) {
     if let Some((idx, payload, info, control, followup)) = vulnerability {
         let confidence = compute_confidence(&info, timing_threshold, baseline_noisy);
         let detection_signals = collect_detection_signals(
@@ -1033,7 +1062,11 @@ fn build_check_result(
             normal_duration_ms: normal_duration.as_millis() as u64,
             attack_duration_ms: Some(attack_duration_ms),
             timestamp: Utc::now().to_rfc3339(),
-            payload: Some(payload.clone()),
+            // The reported `payload` is a textual echo (a JSON string must be
+            // valid UTF-8), so a non-UTF-8 obfuscation byte renders lossily here.
+            // The byte-accurate request is preserved via `Some((idx, payload))`
+            // below and written verbatim by payload export.
+            payload: Some(String::from_utf8_lossy(&payload).into_owned()),
             confidence: Some(confidence),
             detection_signals,
             diagnostics,
@@ -1064,7 +1097,7 @@ fn build_check_result(
 /// follow-up divergence)`.
 type VulnerabilityFinding = (
     usize,
-    String,
+    Vec<u8>,
     VulnerabilityInfo,
     Option<ControlObservation>,
     Option<FollowupObservation>,
@@ -1428,13 +1461,13 @@ mod tests {
     #[test]
     fn payload_eligible_skips_plain_request() {
         let p = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
-        assert!(!payload_eligible_for_control(p));
+        assert!(!payload_eligible_for_control(p.as_bytes()));
     }
 
     #[test]
     fn payload_eligible_for_te_payload() {
         let p = "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG";
-        assert!(payload_eligible_for_control(p));
+        assert!(payload_eligible_for_control(p.as_bytes()));
     }
 
     #[test]
@@ -1442,7 +1475,7 @@ mod tests {
         // H2C payload has TE-related body but the Upgrade header makes control
         // comparison meaningless (TE stripping doesn't disable H2C smuggling).
         let p = "POST / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: h2c\r\nTransfer-Encoding: chunked\r\n\r\n";
-        assert!(!payload_eligible_for_control(p));
+        assert!(!payload_eligible_for_control(p.as_bytes()));
     }
 
     #[test]
@@ -1450,7 +1483,7 @@ mod tests {
         // Original attack body "0\r\n\r\nG" is 6 bytes — control should match
         // that size with benign ASCII padding.
         let p = "POST /a HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG";
-        let control = build_control_request(p);
+        let control = build_control_request(p.as_bytes());
         let lower = control.to_ascii_lowercase();
         assert!(!lower.contains("transfer-encoding"));
         assert!(lower.contains("content-length: 6\r\n"));
@@ -1466,7 +1499,7 @@ mod tests {
     #[test]
     fn build_control_zero_body_when_attack_has_none() {
         let p = "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n";
-        let control = build_control_request(p);
+        let control = build_control_request(p.as_bytes());
         assert!(control.contains("Content-Length: 0\r\n"));
         let (_, body) = control.rsplit_once("\r\n\r\n").unwrap();
         assert!(body.is_empty());
@@ -1480,7 +1513,7 @@ mod tests {
             "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 99999\r\n\r\n{}",
             huge_body
         );
-        let control = build_control_request(&p);
+        let control = build_control_request(p.as_bytes());
         assert!(control.contains(&format!("Content-Length: {}\r\n", CONTROL_BODY_MAX_BYTES)));
         let (_, body) = control.rsplit_once("\r\n\r\n").unwrap();
         assert_eq!(body.len(), CONTROL_BODY_MAX_BYTES);
@@ -1489,7 +1522,7 @@ mod tests {
     #[test]
     fn build_control_preserves_custom_headers() {
         let p = "POST / HTTP/1.1\r\nHost: x\r\nCookie: s=1\r\nX-Custom: v\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG";
-        let control = build_control_request(p);
+        let control = build_control_request(p.as_bytes());
         assert!(control.contains("Cookie: s=1"));
         assert!(control.contains("X-Custom: v"));
     }
@@ -1619,18 +1652,35 @@ mod tests {
     #[test]
     fn payload_method_extracts_post() {
         let p = "POST /a HTTP/1.1\r\nHost: x\r\n\r\n";
-        assert_eq!(payload_method(p), "POST");
+        assert_eq!(payload_method(p.as_bytes()), "POST");
     }
 
     #[test]
     fn payload_method_uppercases() {
         let p = "patch /a HTTP/1.1\r\nHost: x\r\n\r\n";
-        assert_eq!(payload_method(p), "PATCH");
+        assert_eq!(payload_method(p.as_bytes()), "PATCH");
     }
 
     #[test]
     fn payload_method_defaults_to_get_on_empty() {
-        assert_eq!(payload_method(""), "GET");
+        assert_eq!(payload_method(b""), "GET");
+    }
+
+    #[test]
+    fn followup_status_diverged_requires_known_baseline() {
+        // A parseable non-5xx follow-up genuinely differing from a known
+        // baseline diverges.
+        assert!(followup_status_diverged(Some(200), Some(404)));
+        // Same status → no divergence.
+        assert!(!followup_status_diverged(Some(200), Some(200)));
+        // 5xx follow-ups are never treated as divergence (flake-prone).
+        assert!(!followup_status_diverged(Some(503), Some(200)));
+        // Unparseable baseline (None): a clean follow-up must NOT be counted as
+        // diverged, otherwise every follow-up trivially corroborates a false
+        // positive when the baseline status line was unreadable.
+        assert!(!followup_status_diverged(Some(200), None));
+        // Unparseable follow-up is not a divergence either.
+        assert!(!followup_status_diverged(None, Some(200)));
     }
 
     #[test]

@@ -923,6 +923,11 @@ fn bytes_to_string(bytes: Vec<u8>) -> String {
 }
 
 /// Sends a raw HTTP request and returns the response and duration.
+///
+/// Thin wrapper over [`send_request_bytes`] for the common case where the request
+/// is valid UTF-8. Requests carrying raw bytes > 0x7F (e.g. TE-obfuscation
+/// payloads that splice a NEL/NBSP byte into a header) must use
+/// [`send_request_bytes`] directly — a `String`/`&str` cannot hold those bytes.
 pub async fn send_request(
     host: &str,
     port: u16,
@@ -931,9 +936,25 @@ pub async fn send_request(
     verbose: bool,
     use_tls: bool,
 ) -> Result<(String, Duration)> {
+    send_request_bytes(host, port, request.as_bytes(), timeout, verbose, use_tls).await
+}
+
+/// Sends a raw HTTP request supplied as exact bytes and returns the response and
+/// duration. This is the byte-accurate path: the payload is written to the socket
+/// verbatim, so obfuscation bytes that are not valid UTF-8 survive to the wire.
+pub async fn send_request_bytes(
+    host: &str,
+    port: u16,
+    request: &[u8],
+    timeout: u64,
+    verbose: bool,
+    use_tls: bool,
+) -> Result<(String, Duration)> {
     if verbose {
         println!("\n{}", "--- REQUEST ---".bold().blue());
-        println!("{}", request.cyan());
+        // The request may contain non-UTF-8 obfuscation bytes; render lossily for
+        // display only. The exact bytes are still written to the socket below.
+        println!("{}", String::from_utf8_lossy(request).cyan());
     }
 
     let start = Instant::now();
@@ -941,7 +962,7 @@ pub async fn send_request(
 
     let result = tokio::time::timeout(timeout_dur, async {
         let mut stream = get_stream(host, port, use_tls).await?;
-        stream.write_all(request.as_bytes()).await?;
+        stream.write_all(request).await?;
         // Read exactly one final HTTP/1.x response, skipping informational
         // responses such as 100 Continue.
         read_one_final_response(&mut *stream).await
