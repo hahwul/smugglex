@@ -30,6 +30,57 @@ use smugglex::raw_request::{merge_headers, parse_raw_request};
 use smugglex::scanner::{CheckParams, run_checks_for_type};
 use smugglex::utils::{LogLevel, fetch_cookies, is_machine, log, set_machine};
 
+/// Convert a `Vec<String>` payload family into the byte-oriented representation
+/// (`Vec<Vec<u8>>`) the scanner consumes.
+fn strings_to_bytes(payloads: Vec<String>) -> Vec<Vec<u8>> {
+    payloads.into_iter().map(String::into_bytes).collect()
+}
+
+// Byte-oriented adapters for the pure-ASCII payload families (h2c/h2/cl-edge),
+// which still build `Vec<String>`. They let the whole `all_checks` dispatch table
+// share one `fn(...) -> Vec<Vec<u8>>` signature alongside the raw-byte TE families.
+fn h2c_payloads_bytes(
+    path: &str,
+    host: &str,
+    method: &str,
+    custom_headers: &[String],
+    cookies: &[String],
+) -> Vec<Vec<u8>> {
+    strings_to_bytes(get_h2c_payloads(
+        path,
+        host,
+        method,
+        custom_headers,
+        cookies,
+    ))
+}
+
+fn h2_payloads_bytes(
+    path: &str,
+    host: &str,
+    method: &str,
+    custom_headers: &[String],
+    cookies: &[String],
+) -> Vec<Vec<u8>> {
+    strings_to_bytes(get_h2_payloads(path, host, method, custom_headers, cookies))
+}
+
+fn cl_edge_payloads_bytes(
+    path: &str,
+    host: &str,
+    method: &str,
+    custom_headers: &[String],
+    cookies: &[String],
+) -> Vec<Vec<u8>> {
+    strings_to_bytes(get_cl_edge_case_payloads(
+        path,
+        host,
+        method,
+        custom_headers,
+        cookies,
+    ))
+}
+
 #[derive(Debug)]
 struct ExploitParams<'a> {
     exploit_str: &'a str,
@@ -171,7 +222,16 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("smugglex {}", env!("CARGO_PKG_VERSION"));
+        // Keep stdout a single JSON document in machine mode; a bare text line
+        // would break a JSON consumer that also passes -v/--version.
+        if is_machine() {
+            println!(
+                "{}",
+                serde_json::json!({ "smugglex_version": env!("CARGO_PKG_VERSION") })
+            );
+        } else {
+            println!("smugglex {}", env!("CARGO_PKG_VERSION"));
+        }
         return Ok(());
     }
 
@@ -453,6 +513,13 @@ fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
         Ok(cli.urls.clone())
     } else if !io::stdin().is_terminal() {
         Ok(collect_url_lines(io::stdin().lock().lines()))
+    } else if is_machine() {
+        // No URLs and stdin is an interactive terminal. In machine/JSON mode we
+        // must NOT dump clap's help banner to stdout and let it exit 0 — that
+        // violates JSON-stdout purity and the exit-code contract. Return an empty
+        // list so the caller emits the structured input error and exits 2 (the
+        // same path the piped/empty-stdin branch takes).
+        Ok(Vec::new())
     } else {
         Cli::parse_from(["smugglex", "--help"]);
         Ok(Vec::new())
@@ -507,6 +574,20 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         Ok(u) => u,
         Err(e) => return scan_failure(format!("URL parse error: {}", e)),
     };
+
+    // Only http/https are meaningful for an HTTP request-smuggling scanner. Any
+    // other scheme that happens to carry a known default port (ftp://, ws://,
+    // gopher://, …) would otherwise be silently treated as plaintext HTTP on that
+    // port (use_tls keys solely off "https"), scanning the wrong service. Reject
+    // it as an input error instead of connecting somewhere the user didn't mean.
+    match url.scheme() {
+        "http" | "https" => {}
+        other => {
+            return scan_failure(format!(
+                "unsupported URL scheme '{other}'; only http:// and https:// are supported"
+            ));
+        }
+    }
 
     let host = match url.host_str() {
         Some(h) => h,
@@ -614,16 +695,20 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         }
     }
 
+    // The CL.TE/TE.CL/TE.TE families return raw request bytes (`Vec<Vec<u8>>`) so
+    // their extended-ASCII TE obfuscations reach the wire verbatim. The h2c/h2/
+    // cl-edge families are pure ASCII and return `Vec<String>`; wrap them so the
+    // whole dispatch table shares one byte-oriented signature.
     let all_checks = [
         (
             "cl-te",
-            get_cl_te_payloads as fn(&str, &str, &str, &[String], &[String]) -> Vec<String>,
+            get_cl_te_payloads as fn(&str, &str, &str, &[String], &[String]) -> Vec<Vec<u8>>,
         ),
         ("te-cl", get_te_cl_payloads),
         ("te-te", get_te_te_payloads),
-        ("h2c", get_h2c_payloads),
-        ("h2", get_h2_payloads),
-        ("cl-edge", get_cl_edge_case_payloads),
+        ("h2c", h2c_payloads_bytes),
+        ("h2", h2_payloads_bytes),
+        ("cl-edge", cl_edge_payloads_bytes),
     ];
 
     let checks_to_run: Vec<_> = if let Some(ref checks_str) = cli.checks {
@@ -705,7 +790,8 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
             break;
         }
 
-        let mut payloads = payload_fn(path, host_header, &cli.method, &cli.headers, &cookies);
+        let mut payloads: Vec<Vec<u8>> =
+            payload_fn(path, host_header, &cli.method, &cli.headers, &cookies);
 
         if cli.fuzz {
             let config = MutatorConfig {
@@ -713,7 +799,27 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                 mutations_per_payload: 5,
             };
             let mut mutator = Mutator::new(config);
-            payloads = mutator.mutate_payloads(&payloads);
+            // The mutation engine is UTF-8/string based, so it can only mutate
+            // seeds that are valid UTF-8. Split them: UTF-8-clean seeds go through
+            // the mutator; seeds carrying non-UTF-8 obfuscation bytes (NEL/NBSP/
+            // soft-hyphen/…) are passed through VERBATIM rather than lossily
+            // round-tripped — otherwise --fuzz would replace those exact bytes
+            // with U+FFFD and silently un-test the very vectors the byte pipeline
+            // exists to send.
+            let mut mutable: Vec<String> = Vec::new();
+            let mut passthrough: Vec<Vec<u8>> = Vec::new();
+            for p in std::mem::take(&mut payloads) {
+                match String::from_utf8(p) {
+                    Ok(s) => mutable.push(s),
+                    Err(e) => passthrough.push(e.into_bytes()),
+                }
+            }
+            payloads = mutator
+                .mutate_payloads(&mutable)
+                .into_iter()
+                .map(String::into_bytes)
+                .collect();
+            payloads.extend(passthrough);
         }
 
         if let Some(max) = cli.max_payloads {
@@ -940,6 +1046,22 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         pb.inc(1);
     }
 
+    // If the requested checks resolved to nothing runnable for this target, the
+    // scan tested nothing — it must NOT be reported as a clean exit-0 result. The
+    // canonical trigger is `--checks h2-downgrade` against an http:// target: the
+    // name is valid (so the up-front validation passes) but h2-downgrade needs
+    // ALPN h2 over TLS, leaving zero runnable checks. Surfacing it as an error
+    // makes the JSON output and exit code distinguish "0 checks run" from "clean".
+    let no_runnable_checks = total_checks == 0;
+    if no_runnable_checks && !is_machine() {
+        log(
+            LogLevel::Warning,
+            &format!(
+                "{display_target}: no runnable checks for this target (e.g. h2-downgrade requires an https target); nothing was scanned"
+            ),
+        );
+    }
+
     // If checks were attempted but none reached the target, it is unreachable
     // (host down, connection refused, TLS failure) rather than clean. Record it
     // so the scan is not misreported as a clean exit-0 result.
@@ -1030,8 +1152,16 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         timestamp: chrono::Utc::now().to_rfc3339(),
         fingerprint: fingerprint_info,
         checks: results,
-        error: target_unreachable
-            .then(|| "target unreachable: every check failed to connect".to_string()),
+        error: if no_runnable_checks {
+            Some(
+                "no runnable checks for this target (e.g. h2-downgrade requires an https target); nothing was scanned"
+                    .to_string(),
+            )
+        } else if target_unreachable {
+            Some("target unreachable: every check failed to connect".to_string())
+        } else {
+            None
+        },
     };
 
     ScanOutcome::Success {

@@ -13,7 +13,7 @@ use chrono::Utc;
 use indicatif::ProgressBar;
 
 use crate::error::{Result, SmugglexError};
-use crate::http::send_request;
+use crate::http::send_request_bytes;
 use crate::model::{CheckResult, Confidence};
 use crate::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_te_cl_payloads, get_te_te_payloads,
@@ -51,7 +51,9 @@ pub struct ParserDiscrepancyParams<'a> {
 #[derive(Clone, Debug)]
 struct ParserCase {
     name: String,
-    probe: String,
+    /// Raw probe request bytes (may carry non-UTF-8 TE-obfuscation bytes).
+    probe: Vec<u8>,
+    /// Framing-stripped control request — always pure ASCII.
     control: String,
 }
 
@@ -84,7 +86,9 @@ fn build_cases(
     max_payloads: Option<usize>,
 ) -> Vec<ParserCase> {
     let limit = max_payloads.unwrap_or(DEFAULT_CASE_LIMIT);
-    let families = [
+    // The TE families already return raw bytes; cl-edge is pure ASCII, so convert
+    // it to bytes for a uniform corpus.
+    let families: [(&str, Vec<Vec<u8>>); 4] = [
         (
             "cl-te",
             get_cl_te_payloads(path, host, method, custom_headers, cookies),
@@ -99,11 +103,14 @@ fn build_cases(
         ),
         (
             "cl-edge",
-            get_cl_edge_case_payloads(path, host, method, custom_headers, cookies),
+            get_cl_edge_case_payloads(path, host, method, custom_headers, cookies)
+                .into_iter()
+                .map(String::into_bytes)
+                .collect(),
         ),
     ];
     let mut cases = Vec::new();
-    let add_case = |cases: &mut Vec<ParserCase>, family: &str, index: usize, probe: String| {
+    let add_case = |cases: &mut Vec<ParserCase>, family: &str, index: usize, probe: Vec<u8>| {
         cases.push(ParserCase {
             name: format!("{family}[{index}]"),
             control: build_control_request(&probe),
@@ -143,12 +150,12 @@ fn build_cases(
 async fn observe(
     host: &str,
     port: u16,
-    request: &str,
+    request: &[u8],
     timeout: u64,
     verbose: bool,
     use_tls: bool,
 ) -> Observation {
-    match send_request(host, port, request, timeout, verbose, use_tls).await {
+    match send_request_bytes(host, port, request, timeout, verbose, use_tls).await {
         Ok((response, duration)) => Observation {
             status_code: parse_status_code(response.lines().next().unwrap_or_default()),
             status_line: response
@@ -254,7 +261,7 @@ async fn confirm_timeout_difference(
         let control = observe(
             params.host,
             params.port,
-            &case.control,
+            case.control.as_bytes(),
             params.timeout,
             params.verbose,
             params.use_tls,
@@ -320,7 +327,7 @@ pub async fn run_parser_discrepancy_check(
                 observe(
                     params.host,
                     params.port,
-                    &case.control,
+                    case.control.as_bytes(),
                     params.timeout,
                     params.verbose,
                     params.use_tls,
@@ -368,7 +375,9 @@ pub async fn run_parser_discrepancy_check(
                 normal_duration_ms: control.duration.as_millis() as u64,
                 attack_duration_ms: Some(probe.duration.as_millis() as u64),
                 timestamp: Utc::now().to_rfc3339(),
-                payload: Some(case.probe.clone()),
+                // Textual echo of the probe (a JSON string must be valid UTF-8);
+                // a non-UTF-8 obfuscation byte renders lossily here.
+                payload: Some(String::from_utf8_lossy(&case.probe).into_owned()),
                 confidence: Some(Confidence::High),
                 detection_signals,
                 diagnostics: vec![format!("confirmation_retries:{}", CONFIRMATION_RETRIES)],

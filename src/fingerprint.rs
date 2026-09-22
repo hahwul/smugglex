@@ -149,6 +149,16 @@ fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
         if server_lower.contains("nginx") {
             return ProxyType::Nginx;
         }
+        // Apache Traffic Server advertises `Server: Apache Traffic Server/x.y`,
+        // which contains the substring "apache". Detect it BEFORE the generic
+        // Apache branch, otherwise an ATS instance is misidentified as Apache
+        // and the check-ordering heuristic keyed off it is wrong.
+        if server_lower.contains("trafficserver")
+            || server_lower.contains("traffic server")
+            || contains_word(&server_lower, "ats")
+        {
+            return ProxyType::ATS;
+        }
         if server_lower.contains("apache") || server_lower.contains("httpd") {
             return ProxyType::Apache;
         }
@@ -166,9 +176,6 @@ fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
         }
         if server_lower.contains("envoy") {
             return ProxyType::Envoy;
-        }
-        if contains_word(&server_lower, "ats") || server_lower.contains("trafficserver") {
-            return ProxyType::ATS;
         }
         if server_lower.contains("squid") {
             return ProxyType::Squid;
@@ -460,11 +467,24 @@ mod tests {
 
     #[test]
     fn test_identify_ats_trafficserver_form() {
-        let mut headers = HashMap::new();
-        headers.insert("server".to_string(), "Apache Traffic Server".to_string());
-        // "trafficserver" (no space) or the ATS token — cover the packed form.
-        headers.insert("server".to_string(), "trafficserver/9".to_string());
-        assert_eq!(identify_proxy(&headers), ProxyType::ATS);
+        // The canonical `Server: Apache Traffic Server/x.y` form contains the
+        // substring "apache", so it must still resolve to ATS (not Apache). This
+        // is the exact regression fixed by ordering the ATS check first; the old
+        // test overwrote the header key and never actually exercised this form.
+        for server in [
+            "Apache Traffic Server",
+            "Apache Traffic Server/9.1",
+            "ATS/9.2.0",
+            "trafficserver/9",
+        ] {
+            let mut headers = HashMap::new();
+            headers.insert("server".to_string(), server.to_string());
+            assert_eq!(
+                identify_proxy(&headers),
+                ProxyType::ATS,
+                "`Server: {server}` must be identified as ATS, not Apache",
+            );
+        }
     }
 
     #[test]

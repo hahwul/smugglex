@@ -92,16 +92,31 @@ impl Mutator {
         let ws_chars = [" ", "\t", "\x0B", "\x0C"];
         let ws = ws_chars[self.rand_index(ws_chars.len())];
 
-        if let Some(pos) = payload.find("Transfer-Encoding:") {
-            let insert_at = pos + "Transfer-Encoding:".len();
-            let mut result = String::with_capacity(payload.len() + 2);
-            result.push_str(&payload[..insert_at]);
-            result.push_str(ws);
-            result.push_str(&payload[insert_at..]);
-            result
-        } else {
-            payload.to_string()
+        // Locate the Transfer-Encoding header name case-insensitively — like the
+        // sibling strategies (`mutate_te_case`, `mutate_control_char`, …) — rather
+        // than requiring the exact canonical `Transfer-Encoding:` spelling. The
+        // old case-sensitive, colon-adjacent match returned the payload unchanged
+        // for any obfuscated seed (`TRANSFER-ENCODING:`, `Transfer-Encoding :`,
+        // …); that no-op mutant then collided with the original in the dedup set
+        // and was dropped, so this strategy produced nothing for a large class of
+        // TE payloads. Insert the whitespace right after the header's colon,
+        // searching only within the header line so a colon elsewhere can't be hit.
+        if let Some(start) = find_case_insensitive(payload, "transfer-encoding") {
+            let name_end = start + "Transfer-Encoding".len();
+            let line_end = payload[name_end..]
+                .find("\r\n")
+                .map(|rel| name_end + rel)
+                .unwrap_or(payload.len());
+            if let Some(colon_rel) = payload[name_end..line_end].find(':') {
+                let insert_at = name_end + colon_rel + 1;
+                let mut result = String::with_capacity(payload.len() + 2);
+                result.push_str(&payload[..insert_at]);
+                result.push_str(ws);
+                result.push_str(&payload[insert_at..]);
+                return result;
+            }
         }
+        payload.to_string()
     }
 
     /// Strategy 2: Randomize case of Transfer-Encoding header.
@@ -342,6 +357,35 @@ mod tests {
                 !mutated.contains("Content-Length: -"),
                 "off-by-one mutation must not produce a negative Content-Length"
             );
+        }
+    }
+
+    #[test]
+    fn mutate_te_whitespace_handles_obfuscated_te_headers() {
+        let mut m = Mutator::new(MutatorConfig {
+            seed: 7,
+            mutations_per_payload: 1,
+        });
+        // A non-canonical TE header (uppercase, and a space before the colon)
+        // must still get whitespace injected after its colon. The old
+        // case-sensitive `find("Transfer-Encoding:")` returned it unchanged.
+        for (seed, marker) in [
+            (
+                "POST / HTTP/1.1\r\nHost: h\r\nTRANSFER-ENCODING: chunked\r\n\r\n0\r\n\r\n",
+                "TRANSFER-ENCODING:",
+            ),
+            (
+                "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding : chunked\r\n\r\n0\r\n\r\n",
+                "Transfer-Encoding :",
+            ),
+        ] {
+            let mutated = m.mutate_te_whitespace(seed);
+            assert_ne!(
+                mutated, seed,
+                "obfuscated TE header `{marker}` must be mutated, not returned unchanged"
+            );
+            // Exactly one whitespace byte was injected.
+            assert_eq!(mutated.len(), seed.len() + 1);
         }
     }
 

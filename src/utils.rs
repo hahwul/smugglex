@@ -98,13 +98,16 @@ pub fn sanitize_hostname(host: &str) -> String {
         .collect()
 }
 
-/// Export payload to a file
+/// Export payload to a file. `payload` is written verbatim as bytes so a
+/// TE-obfuscation request carrying raw bytes > 0x7F (NEL, NBSP, …) is saved
+/// exactly as it goes on the wire — usable directly for exploitation — rather
+/// than a lossy UTF-8 rendering.
 pub fn export_payload(
     export_dir: &str,
     host: &str,
     check_type: &str,
     payload_index: usize,
-    payload: &str,
+    payload: &[u8],
     use_tls: bool,
 ) -> Result<String> {
     // Create export directory if it doesn't exist

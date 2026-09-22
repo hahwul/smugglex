@@ -29,7 +29,14 @@ fn test_export_payload_creates_file() {
     let temp_dir = create_test_dir("export");
 
     let payload = "POST / HTTP/1.1\r\nHost: example.com\r\n\r\n";
-    let result = export_payload(&temp_dir, "example.com", "CLTE", 0, payload, true);
+    let result = export_payload(
+        &temp_dir,
+        "example.com",
+        "CLTE",
+        0,
+        payload.as_bytes(),
+        true,
+    );
 
     assert!(result.is_ok(), "export_payload should succeed");
     let filename = result.unwrap();
@@ -52,7 +59,7 @@ fn test_export_payload_creates_file() {
 fn test_export_payload_sanitizes_hostname() {
     let temp_dir = create_test_dir("sanitize");
 
-    let result = export_payload(&temp_dir, "sub.example.com:8080", "TECL", 1, "test", false);
+    let result = export_payload(&temp_dir, "sub.example.com:8080", "TECL", 1, b"test", false);
 
     assert!(result.is_ok(), "export_payload should succeed");
     let filename = result.unwrap();
@@ -127,7 +134,14 @@ fn test_sanitize_hostname_no_special_chars() {
 fn test_export_payload_with_https() {
     let temp_dir = create_test_dir("https");
 
-    let result = export_payload(&temp_dir, "secure.example.com", "CL.TE", 0, "payload", true);
+    let result = export_payload(
+        &temp_dir,
+        "secure.example.com",
+        "CL.TE",
+        0,
+        b"payload",
+        true,
+    );
 
     assert!(result.is_ok(), "export_payload should succeed");
     let filename = result.unwrap();
@@ -144,9 +158,9 @@ fn test_export_payload_multiple_files() {
     let temp_dir = create_test_dir("multiple");
 
     // Export multiple payloads
-    let result1 = export_payload(&temp_dir, "example.com", "CL.TE", 0, "payload1", true);
-    let result2 = export_payload(&temp_dir, "example.com", "CL.TE", 1, "payload2", true);
-    let result3 = export_payload(&temp_dir, "example.com", "TE.CL", 0, "payload3", true);
+    let result1 = export_payload(&temp_dir, "example.com", "CL.TE", 0, b"payload1", true);
+    let result2 = export_payload(&temp_dir, "example.com", "CL.TE", 1, b"payload2", true);
+    let result3 = export_payload(&temp_dir, "example.com", "TE.CL", 0, b"payload3", true);
 
     assert!(result1.is_ok(), "First export should succeed");
     assert!(result2.is_ok(), "Second export should succeed");
@@ -175,7 +189,7 @@ fn test_export_payload_creates_directory_if_not_exists() {
     // Ensure directory doesn't exist
     let _ = fs::remove_dir_all(temp_dir_str);
 
-    let result = export_payload(temp_dir_str, "example.com", "CL.TE", 0, "test", true);
+    let result = export_payload(temp_dir_str, "example.com", "CL.TE", 0, b"test", true);
 
     assert!(result.is_ok(), "export_payload should create directory");
     assert!(
