@@ -23,7 +23,7 @@ description = "All CLI options for smugglex"
 | `--cookies` | | Fetch and append cookies from the initial request |
 | `-d, --delay` | 0 | Delay between requests in milliseconds |
 | `-j, --concurrency` | 1 | Number of URLs to scan concurrently |
-| `-x, --proxy` | | HTTP proxy URL for CONNECT tunneling, e.g. `http://127.0.0.1:8080` (SOCKS is not supported) |
+| `-x, --proxy` | | HTTP or HTTPS proxy URL for CONNECT tunneling, e.g. `http://127.0.0.1:8080` (SOCKS is not supported) |
 
 ## Detection
 

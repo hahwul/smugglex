@@ -32,7 +32,7 @@ brew install hahwul/smugglex/smugglex
 
 ### Build from Source
 
-Requires Rust 1.70 or later:
+Requires Rust 1.88 or later:
 
 ```bash
 git clone https://github.com/hahwul/smugglex

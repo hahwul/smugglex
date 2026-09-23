@@ -93,12 +93,7 @@ pub fn parse_raw_request(content: &str) -> Result<RawRequest> {
     // Guard against pointing `--raw-request` at a non-HTTP file (e.g. an accidental
     // JSON or HTML document): a valid method is an RFC 7230 token, so anything with
     // quotes/braces/colons gives a clear error instead of a baffling downstream one.
-    if method.is_empty() || !method.bytes().all(is_tchar) {
-        return Err(SmugglexError::InvalidInput(format!(
-            "'{}' is not a valid HTTP method; the first line does not look like an HTTP request line (expected e.g. 'GET /path HTTP/1.1')",
-            method
-        )));
-    }
+    validate_http_method(&method)?;
     let target_raw = parts
         .next()
         .ok_or_else(|| {
@@ -166,6 +161,7 @@ fn parse_origin_form(
             "raw request is missing a Host header (required to determine the target)".to_string(),
         )
     })?;
+    validate_host_header_value(&host_header)?;
     let (host, port) = split_host_port(&host_header)?;
     // A present-but-empty Host (`Host:` or `Host:   `) leaves no connection
     // target; rejecting it here fails fast with a clear message instead of a
@@ -229,6 +225,7 @@ fn parse_absolute_form(
         Some(p) => format!("{}:{}", host, p),
         None => host.clone(),
     });
+    validate_host_header_value(&host_header)?;
 
     Ok(RawRequest {
         method,
@@ -263,6 +260,33 @@ fn is_managed_header(name: &str) -> bool {
 /// method is built from. Used to sanity-check the request line's method.
 fn is_tchar(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
+/// Validate a method token before it is interpolated into an HTTP request line.
+pub fn validate_http_method(method: &str) -> Result<()> {
+    if method.is_empty() || !method.bytes().all(is_tchar) {
+        return Err(SmugglexError::InvalidInput(format!(
+            "{method:?} is not a valid HTTP method; methods must contain only HTTP token characters (for example, GET)"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject an empty or control-character-bearing Host value before placing it
+/// into an HTTP header. Spaces and other printable bytes remain available for
+/// deliberate malformed-Host testing.
+pub fn validate_host_header_value(value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(SmugglexError::InvalidInput(
+            "Host header value must not be empty".to_string(),
+        ));
+    }
+    if value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(SmugglexError::InvalidInput(
+            "Host header value must not contain control characters".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Split a `Host` header value into host and optional port.
@@ -532,6 +556,31 @@ mod tests {
                 matches!(err, SmugglexError::InvalidInput(_)),
                 "empty Host should be InvalidInput, raw = {raw:?}"
             );
+        }
+    }
+
+    #[test]
+    fn rejects_empty_host_in_absolute_form() {
+        let raw = "GET http://backend.example/ HTTP/1.1\r\nHost:\r\n\r\n";
+        assert!(matches!(
+            parse_raw_request(raw),
+            Err(SmugglexError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn validates_method_and_host_values_before_request_generation() {
+        assert!(validate_http_method("GPOST").is_ok());
+        assert!(validate_http_method("M-SEARCH").is_ok());
+        for method in ["", "GET\r\nX-Injected: yes", "BAD METHOD", "GET\0"] {
+            assert!(validate_http_method(method).is_err());
+        }
+
+        assert!(validate_host_header_value("vhost.example:8443").is_ok());
+        // Printable malformed values remain available for deliberate Host tests.
+        assert!(validate_host_header_value("vhost with spaces").is_ok());
+        for value in ["", "   ", "host\r\nX-Injected: yes", "host\0evil"] {
+            assert!(validate_host_header_value(value).is_err());
         }
     }
 

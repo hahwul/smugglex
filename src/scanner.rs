@@ -207,6 +207,29 @@ fn payload_method(payload: &[u8]) -> String {
         .unwrap_or_else(|| "GET".to_string())
 }
 
+/// Read the first `Host` header from a generated request. The socket hostname
+/// can differ from the HTTP authority when `--vhost` or `--raw-request` is used.
+fn payload_authority(payload: &[u8]) -> Option<&str> {
+    let head_end = payload
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or(payload.len());
+    payload[..head_end]
+        .split(|&byte| byte == b'\n')
+        .skip(1)
+        .find_map(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let colon = line.iter().position(|&byte| byte == b':')?;
+            if !line[..colon].eq_ignore_ascii_case(b"host") {
+                return None;
+            }
+            std::str::from_utf8(&line[colon + 1..])
+                .ok()
+                .map(str::trim_ascii)
+                .filter(|value| !value.is_empty())
+        })
+}
+
 /// Send `count` shape-matched baseline probes that mirror the attack method but
 /// carry no smuggling artifacts (Content-Length: 0, empty body). Used to
 /// augment the GET baseline so timing thresholds account for backend's natural
@@ -215,6 +238,7 @@ fn payload_method(payload: &[u8]) -> String {
 #[allow(clippy::too_many_arguments)]
 async fn method_matched_baseline_durations(
     host: &str,
+    authority: &str,
     port: u16,
     path: &str,
     method: &str,
@@ -225,7 +249,7 @@ async fn method_matched_baseline_durations(
 ) -> Vec<Duration> {
     let probe = format!(
         "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-        method, path, host
+        method, path, authority
     );
     let mut futures = Vec::with_capacity(count);
     for _ in 0..count {
@@ -241,31 +265,26 @@ async fn method_matched_baseline_durations(
 /// Measure baseline by sending normal requests and computing median timing.
 /// Requests are sent concurrently for faster baseline establishment.
 async fn measure_baseline(
-    host: &str,
-    port: u16,
-    path: &str,
-    timeout: u64,
-    verbose: bool,
-    use_tls: bool,
-    baseline_count: usize,
+    params: &CheckParams<'_>,
+    authority: &str,
 ) -> Result<BaselineMeasurement> {
     // Clamp to a minimum of 1 to avoid empty-slice panic and meaningless thresholds.
-    let count = baseline_count.max(1);
+    let count = params.baseline_count.max(1);
 
     let normal_request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        path, host
+        params.path, authority
     );
 
     let mut futures = Vec::with_capacity(count);
     for _ in 0..count {
         futures.push(send_request(
-            host,
-            port,
+            params.host,
+            params.port,
             &normal_request,
-            timeout,
-            verbose,
-            use_tls,
+            params.timeout,
+            params.verbose,
+            params.use_tls,
         ));
     }
 
@@ -629,9 +648,10 @@ async fn observe_followup_divergence(
     path: &str,
     baseline: &BaselineMeasurement,
 ) -> FollowupObservation {
+    let authority = payload_authority(params.attack_request).unwrap_or(params.host);
     let probe = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        path, params.host
+        path, authority
     );
     let mut diverging = 0usize;
     let mut total = 0usize;
@@ -713,9 +733,10 @@ async fn count_structural_followup_divergence(
     path: &str,
     baseline: &BaselineMeasurement,
 ) -> usize {
+    let authority = payload_authority(params.attack_request).unwrap_or(params.host);
     let probe = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        path, params.host
+        path, authority
     );
     let mut diverging = 0usize;
     for _ in 0..FOLLOWUP_PROBE_COUNT {
@@ -1123,16 +1144,12 @@ struct TimingContext {
 /// GET baseline would otherwise understate the per-request floor for the real
 /// attack shape.
 async fn establish_timing_context(params: &CheckParams<'_>) -> Result<TimingContext> {
-    let baseline = measure_baseline(
-        params.host,
-        params.port,
-        params.path,
-        params.timeout,
-        params.verbose,
-        params.use_tls,
-        params.baseline_count,
-    )
-    .await?;
+    let authority = params
+        .attack_requests
+        .first()
+        .and_then(|payload| payload_authority(payload))
+        .unwrap_or(params.host);
+    let baseline = measure_baseline(params, authority).await?;
 
     let attack_method = params
         .attack_requests
@@ -1144,6 +1161,7 @@ async fn establish_timing_context(params: &CheckParams<'_>) -> Result<TimingCont
     if attack_method != "GET" && !attack_method.is_empty() {
         let extra = method_matched_baseline_durations(
             params.host,
+            authority,
             params.port,
             params.path,
             &attack_method,
@@ -1428,6 +1446,13 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payload_authority_reads_host_header_case_insensitively() {
+        let payload = b"GET / HTTP/1.1\r\nhOsT: vhost.example:8443\r\nConnection: close\r\n\r\n";
+        assert_eq!(payload_authority(payload), Some("vhost.example:8443"));
+        assert_eq!(payload_authority(b"GET / HTTP/1.1\r\n\r\n"), None);
+    }
 
     #[test]
     fn baseline_majority_timeout_empty_is_false() {

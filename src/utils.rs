@@ -38,9 +38,23 @@ pub async fn fetch_cookies(
     timeout: u64,
     verbose: bool,
 ) -> Result<Vec<String>> {
+    fetch_cookies_with_authority(host, host, port, path, use_tls, timeout, verbose).await
+}
+
+/// Fetch cookies using a separate HTTP `Host` value. This is needed when the
+/// connection hostname and the virtual host selected by the request differ.
+pub async fn fetch_cookies_with_authority(
+    host: &str,
+    authority: &str,
+    port: u16,
+    path: &str,
+    use_tls: bool,
+    timeout: u64,
+    verbose: bool,
+) -> Result<Vec<String>> {
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        path, host
+        path, authority
     );
 
     let (response, _) = send_request(host, port, &request, timeout, verbose, use_tls).await?;

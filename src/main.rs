@@ -10,10 +10,10 @@ use smugglex::desync::{ConnectionDesyncParams, run_cl0_check, run_zero_cl_check}
 use smugglex::error::{Result, SmugglexError};
 use smugglex::exploit::{
     LocalhostAccessParams, PathFuzzParams, VulnerabilityContext, extract_vulnerability_context,
-    get_fuzz_paths, print_localhost_results, print_path_fuzz_results, test_localhost_access,
-    test_path_fuzz,
+    get_fuzz_paths, print_localhost_results, print_path_fuzz_results,
+    test_localhost_access_with_authority, test_path_fuzz_with_authority,
 };
-use smugglex::fingerprint::{fingerprint_target, suggest_checks};
+use smugglex::fingerprint::{fingerprint_target_with_authority, suggest_checks};
 use smugglex::http;
 use smugglex::model::{CheckResult, FingerprintInfo, ScanResults};
 use smugglex::mutator::{Mutator, MutatorConfig};
@@ -21,14 +21,16 @@ use smugglex::output::{
     build_batch_results, log_scan_results, print_batch_json, save_batch_to_file,
     save_scan_results_to_file,
 };
-use smugglex::parser::{ParserDiscrepancyParams, run_parser_discrepancy_check};
+use smugglex::parser::{ParserDiscrepancyParams, run_parser_discrepancy_check_with_authority};
 use smugglex::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_h2_payloads, get_h2c_payloads,
     get_te_cl_payloads, get_te_te_payloads,
 };
-use smugglex::raw_request::{merge_headers, parse_raw_request};
+use smugglex::raw_request::{
+    merge_headers, parse_raw_request, validate_host_header_value, validate_http_method,
+};
 use smugglex::scanner::{CheckParams, run_checks_for_type};
-use smugglex::utils::{LogLevel, fetch_cookies, is_machine, log, set_machine};
+use smugglex::utils::{LogLevel, fetch_cookies_with_authority, is_machine, log, set_machine};
 
 /// Convert a `Vec<String>` payload family into the byte-oriented representation
 /// (`Vec<Vec<u8>>`) the scanner consumes.
@@ -86,6 +88,7 @@ struct ExploitParams<'a> {
     exploit_str: &'a str,
     results: &'a [CheckResult],
     host: &'a str,
+    authority: &'a str,
     port: u16,
     path: &'a str,
     use_tls: bool,
@@ -253,6 +256,16 @@ async fn main() -> Result<()> {
             std::process::exit(2);
         }
     };
+    if let Err(e) = validate_http_method(&cli.method) {
+        emit_input_error(&cli, &e.to_string());
+        std::process::exit(2);
+    }
+    if let Some(vhost) = cli.vhost.as_deref()
+        && let Err(e) = validate_host_header_value(vhost)
+    {
+        emit_input_error(&cli, &e.to_string());
+        std::process::exit(2);
+    }
     if urls.is_empty() {
         emit_input_error(&cli, "No valid URLs provided");
         // Usage/input error → exit 2 (common convention for CLI tools)
@@ -438,6 +451,7 @@ fn emit_input_error(cli: &Cli, message: &str) {
                 );
             }
         }
+        eprintln!("ERR {message}");
     } else {
         eprintln!("{} {}", "[!]".yellow().bold(), message);
     }
@@ -512,7 +526,7 @@ fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
     if !cli.urls.is_empty() {
         Ok(cli.urls.clone())
     } else if !io::stdin().is_terminal() {
-        Ok(collect_url_lines(io::stdin().lock().lines()))
+        collect_url_lines(io::stdin().lock().lines())
     } else if is_machine() {
         // No URLs and stdin is an interactive terminal. In machine/JSON mode we
         // must NOT dump clap's help banner to stdout and let it exit 0 — that
@@ -529,21 +543,18 @@ fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
 /// Collect target URLs from a stream of input lines: each is trimmed of
 /// surrounding whitespace and dropped if empty, so a `urls.txt` entry like
 /// ` http://x ` (stray spaces, common when piping) still parses downstream
-/// instead of failing `Url::parse` on the leading space. Read errors are
-/// reported to stderr and skipped rather than aborting the whole batch.
-fn collect_url_lines(lines: impl Iterator<Item = io::Result<String>>) -> Vec<String> {
-    lines
-        .filter_map(|line| match line {
-            Ok(l) => {
-                let trimmed = l.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Err(e) => {
-                eprintln!("{} Error reading from stdin: {}", "[!]".yellow().bold(), e);
-                None
-            }
-        })
-        .collect()
+/// instead of failing `Url::parse` on the leading space. A read error aborts
+/// collection so a partial stdin batch cannot be reported as a complete scan.
+fn collect_url_lines(lines: impl Iterator<Item = io::Result<String>>) -> Result<Vec<String>> {
+    let mut urls = Vec::new();
+    for line in lines {
+        let line = line.map_err(|e| SmugglexError::Io(format!("error reading from stdin: {e}")))?;
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            urls.push(trimmed.to_string());
+        }
+    }
+    Ok(urls)
 }
 
 /// Core scan routine for one target. Returns a ScanOutcome (Success with full ScanResults
@@ -633,7 +644,17 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
     }
 
     let cookies = if cli.use_cookies {
-        match fetch_cookies(host, port, path, use_tls, cli.timeout, network_verbose).await {
+        match fetch_cookies_with_authority(
+            host,
+            host_header,
+            port,
+            path,
+            use_tls,
+            cli.timeout,
+            network_verbose,
+        )
+        .await
+        {
             Ok(c) => {
                 if !c.is_empty() && !is_machine() {
                     log(LogLevel::Info, &format!("found {} cookie(s)", c.len()));
@@ -663,7 +684,17 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         if !is_machine() {
             log(LogLevel::Info, "running proxy fingerprint probe");
         }
-        match fingerprint_target(host, port, path, cli.timeout, network_verbose, use_tls).await {
+        match fingerprint_target_with_authority(
+            host,
+            host_header,
+            port,
+            path,
+            cli.timeout,
+            network_verbose,
+            use_tls,
+        )
+        .await
+        {
             Ok(fp) => {
                 if !is_machine() {
                     log(
@@ -874,23 +905,26 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                 current_check, total_checks
             ));
         }
-        let result = run_parser_discrepancy_check(ParserDiscrepancyParams {
-            pb: &pb,
-            host,
-            port,
-            path,
-            method: &cli.method,
-            use_tls,
-            custom_headers: &cli.headers,
-            cookies: &cookies,
-            timeout: cli.timeout,
-            verbose: network_verbose,
-            max_payloads: cli.max_payloads,
-            baseline_count: cli.baseline_count,
-            delay: cli.delay,
-            current_check,
-            total_checks,
-        })
+        let result = run_parser_discrepancy_check_with_authority(
+            ParserDiscrepancyParams {
+                pb: &pb,
+                host,
+                port,
+                path,
+                method: &cli.method,
+                use_tls,
+                custom_headers: &cli.headers,
+                cookies: &cookies,
+                timeout: cli.timeout,
+                verbose: network_verbose,
+                max_payloads: cli.max_payloads,
+                baseline_count: cli.baseline_count,
+                delay: cli.delay,
+                current_check,
+                total_checks,
+            },
+            host_header,
+        )
         .await;
         match result {
             Ok(result) => {
@@ -1101,6 +1135,7 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
                     exploit_str,
                     results: &results,
                     host,
+                    authority: host_header,
                     port,
                     path,
                     use_tls,
@@ -1265,7 +1300,9 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     localhost_ports: &localhost_ports,
                     delay: params.delay,
                 };
-                match test_localhost_access(&localhost_params).await {
+                match test_localhost_access_with_authority(&localhost_params, params.authority)
+                    .await
+                {
                     Ok(localhost_results) => {
                         print_localhost_results(&localhost_results, params.target_url);
                     }
@@ -1317,7 +1354,7 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     fuzz_paths: &fuzz_paths,
                     delay: params.delay,
                 };
-                match test_path_fuzz(&path_fuzz_params).await {
+                match test_path_fuzz_with_authority(&path_fuzz_params, params.authority).await {
                     Ok(path_fuzz_results) => {
                         print_path_fuzz_results(&path_fuzz_results, params.target_url);
                     }
@@ -1351,7 +1388,12 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     rounds: 6,
                     delay: params.delay,
                 };
-                match smugglex::exploit::test_smuggle(&smuggle_params).await {
+                match smugglex::exploit::test_smuggle_with_authority(
+                    &smuggle_params,
+                    params.authority,
+                )
+                .await
+                {
                     Ok(result) => smugglex::exploit::print_smuggle_results(
                         &result,
                         params.target_url,
@@ -1369,7 +1411,7 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     .smuggle_request
                     .map(interpret_line_escapes)
                     .unwrap_or_else(|| {
-                        format!("GET /admin HTTP/1.1\r\nHost: {}\r\n\r\n", params.host)
+                        format!("GET /admin HTTP/1.1\r\nHost: {}\r\n\r\n", params.authority)
                     });
 
                 let capture_params = smugglex::exploit::CaptureParams {
@@ -1382,7 +1424,12 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     smuggled_request: smuggled.clone(),
                     follow_ups: 3,
                 };
-                match smugglex::exploit::test_capture(&capture_params).await {
+                match smugglex::exploit::test_capture_with_authority(
+                    &capture_params,
+                    params.authority,
+                )
+                .await
+                {
                     Ok(result) => smugglex::exploit::print_capture_results(
                         &result,
                         params.target_url,
@@ -1410,7 +1457,12 @@ async fn run_exploits(params: &ExploitParams<'_>) -> Result<()> {
                     reflect_param: params.reveal_param.to_string(),
                     follow_ups: 4,
                 };
-                match smugglex::exploit::test_reveal(&reveal_params).await {
+                match smugglex::exploit::test_reveal_with_authority(
+                    &reveal_params,
+                    params.authority,
+                )
+                .await
+                {
                     Ok(result) => smugglex::exploit::print_reveal_results(
                         &result,
                         params.target_url,
@@ -1457,7 +1509,7 @@ mod tests {
             Ok("http://c.example".to_string()),
         ];
         assert_eq!(
-            collect_url_lines(lines.into_iter()),
+            collect_url_lines(lines.into_iter()).unwrap(),
             vec![
                 "http://a.example".to_string(),
                 "http://b.example".to_string(),
@@ -1538,18 +1590,12 @@ mod tests {
     }
 
     #[test]
-    fn collect_url_lines_skips_read_errors() {
+    fn collect_url_lines_rejects_partial_batch_after_read_error() {
         let lines = vec![
             Ok("http://ok.example".to_string()),
             Err(io::Error::other("boom")),
             Ok("http://ok2.example".to_string()),
         ];
-        assert_eq!(
-            collect_url_lines(lines.into_iter()),
-            vec![
-                "http://ok.example".to_string(),
-                "http://ok2.example".to_string(),
-            ]
-        );
+        assert!(collect_url_lines(lines.into_iter()).is_err());
     }
 }
