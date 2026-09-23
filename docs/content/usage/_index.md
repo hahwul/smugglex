@@ -33,7 +33,7 @@ Pre-built binaries are available from [GitHub Releases](https://github.com/hahwu
 
 ## Build from Source
 
-Requires Rust 1.70+.
+Requires Rust 1.88+.
 
 ```bash
 git clone https://github.com/hahwul/smugglex

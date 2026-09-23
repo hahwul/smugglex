@@ -287,9 +287,19 @@ async fn confirm_timeout_difference(
 pub async fn run_parser_discrepancy_check(
     params: ParserDiscrepancyParams<'_>,
 ) -> Result<CheckResult> {
+    let authority = params.host.to_string();
+    run_parser_discrepancy_check_with_authority(params, &authority).await
+}
+
+/// Run the parser discrepancy audit with a separate HTTP `Host` value. The
+/// connection hostname can differ when scanning a virtual host by IP address.
+pub async fn run_parser_discrepancy_check_with_authority(
+    params: ParserDiscrepancyParams<'_>,
+    authority: &str,
+) -> Result<CheckResult> {
     let cases = build_cases(
         params.path,
-        params.host,
+        authority,
         params.method,
         params.custom_headers,
         params.cookies,

@@ -210,9 +210,23 @@ pub async fn fingerprint_target(
     verbose: bool,
     use_tls: bool,
 ) -> Result<FingerprintResult> {
+    fingerprint_target_with_authority(host, host, port, path, timeout, verbose, use_tls).await
+}
+
+/// Send the fingerprint probe with an explicit HTTP `Host` value, separate
+/// from the hostname used to establish the network connection.
+pub async fn fingerprint_target_with_authority(
+    host: &str,
+    authority: &str,
+    port: u16,
+    path: &str,
+    timeout: u64,
+    verbose: bool,
+    use_tls: bool,
+) -> Result<FingerprintResult> {
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: */*\r\n\r\n",
-        path, host
+        path, authority
     );
 
     let (response, _duration) =

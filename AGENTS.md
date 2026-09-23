@@ -7,50 +7,63 @@ smugglex is Rust-powered HTTP Request Smuggling Scanner. It's designed for secur
 ### Purpose
 - Identify HTTP request smuggling vulnerabilities in web applications and proxies
 - Test for CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling attack vectors
+- Test opt-in CL.0, 0.CL, parser-discrepancy, and HTTP/2 downgrade vectors
 - Support security researchers and penetration testers in authorized testing
 
 ## Project Architecture
 
 ### Core Components
 
-1. **main.rs** - Entry point and orchestration
+1. **src/main.rs** - Entry point and orchestration
    - CLI argument parsing
    - URL processing (command line and stdin pipeline)
    - Scan workflow coordination
    - Progress reporting and result output
 
-2. **cli.rs** - Command-line interface definition
+2. **src/cli.rs** - Command-line interface definition
    - Uses `clap` for argument parsing
    - Defines all CLI options and flags
    - Documentation for each parameter
 
-3. **scanner.rs** - Vulnerability scanning logic
+3. **src/scanner.rs** - Vulnerability scanning logic
    - Contains core vulnerability detection algorithms
    - Timing-based detection (TIMING_MULTIPLIER, MIN_DELAY_MS)
    - Progress tracking during scans
    - Export functionality for vulnerable payloads
 
-4. **payloads.rs** - Attack payload generation
+4. **src/payloads/** - Attack payload generation, split by attack family
    - `get_cl_te_payloads()` - CL.TE attack payloads
    - `get_te_cl_payloads()` - TE.CL attack payloads
    - `get_te_te_payloads()` - TE.TE obfuscation payloads
    - `get_h2c_payloads()` - HTTP/2 Cleartext smuggling payloads
    - `get_h2_payloads()` - HTTP/2 protocol smuggling payloads
 
-5. **http.rs** - HTTP communication layer
+5. **src/http.rs** - HTTP/1.1 communication layer
    - Raw socket communication (TCP and TLS)
    - Request sending and response parsing
-   - Timeout handling
+   - HTTP and HTTPS proxy tunneling, timeout handling
 
-6. **model.rs** - Data structures
+6. **src/http2.rs** - HTTP/2 protocol probes and downgrade detection
+
+7. **src/desync.rs** and **src/parser.rs** - Same-connection CL.0/0.CL probes and differential parser checks
+
+8. **src/raw_request.rs** - Parsing captured request templates
+
+9. **src/output.rs** - Human and machine-readable result output
+
+10. **src/fingerprint.rs** - Proxy/server fingerprinting and check ordering
+
+11. **src/exploit/** - Optional follow-up exploit probes
+
+12. **src/model.rs** - Data structures
    - `CheckResult` - Individual vulnerability check results
    - `ScanResults` - Overall scan results container
 
-7. **error.rs** - Error handling
+13. **src/error.rs** - Error handling
    - Custom `SmugglexError` enum
    - Replaces generic `Box<dyn Error>` for better error types
 
-8. **utils.rs** - Utility functions
+14. **src/utils.rs** - Utility functions
    - Logging functions with color support
    - Cookie fetching functionality
    - Payload export functionality
@@ -75,6 +88,7 @@ Exploits HTTP/2 protocol-level features during protocol translation with 25+ att
 ## Coding Standards
 
 ### Rust Best Practices
+- Minimum supported Rust version: 1.88 (declared by `rust-version` in `Cargo.toml`)
 - Use explicit error types (SmugglexError) instead of generic errors
 - Leverage `async/await` with `tokio` for concurrent operations
 - Apply `rustfmt` for consistent formatting
@@ -102,23 +116,24 @@ Exploits HTTP/2 protocol-level features during protocol translation with 25+ att
 ## Dependencies
 
 Key dependencies and their purposes:
-- **clap** (4.5.53) - CLI argument parsing with derive macros
-- **tokio** (1.48.0) - Async runtime with full features
+- **clap** (4.6.1) - CLI argument parsing with derive macros
+- **tokio** (1.52.3) - Async runtime
 - **colored** (3.0.0) - Terminal color output
 - **indicatif** (0.18.3) - Progress bars and spinners
-- **url** (2.5.7) - URL parsing and validation
+- **url** (2.5.8) - URL parsing and validation
 - **serde/serde_json** (1.0) - Serialization for JSON output
 - **tokio-rustls** (0.26) - TLS support for HTTPS
+- **rustls** (0.23), **rustls-pki-types** (1), **webpki-roots** (1.0) - TLS configuration and trust roots
 - **chrono** (0.4) - Timestamp handling
-- **once_cell** (1.21) - Lazy static initialization
+- **futures** (0.3) - Concurrent baseline request coordination
 
 ## Development Guidelines
 
 ### Adding New Attack Types
-1. Create payload generation function in `payloads.rs`
-2. Add check type to CLI options in `cli.rs`
-3. Implement detection logic in `scanner.rs` if needed
-4. Add check to main scanning loop in `main.rs`
+1. Add payload generation in the appropriate module under `src/payloads/`
+2. Register the check name in `src/cli.rs`
+3. Implement detection logic in `src/scanner.rs`, `src/desync.rs`, `src/parser.rs`, or `src/http2.rs` as appropriate
+4. Add check dispatch to `src/main.rs`
 5. Update README.md with attack description
 6. Add tests for new payloads
 
@@ -131,8 +146,8 @@ Key dependencies and their purposes:
 6. Write tests for new functionality
 
 ### Modifying Payloads
-- Payload functions are in `payloads.rs`
-- Each function returns `Vec<String>` of HTTP requests
+- Payload functions are in `src/payloads/`
+- Most payload families return `Vec<String>`; byte-preserving families return `Vec<Vec<u8>>`
 - Use helper functions to avoid duplication
 - Include comments explaining obfuscation techniques
 - Reference research papers or blogs when applicable
@@ -219,6 +234,8 @@ let result = run_checks_for_type(CheckParams {
     export_dir: cli.export_dir.as_deref(),
     current_check,
     total_checks,
+    delay,
+    baseline_count,
 }).await?;
 ```
 

@@ -216,26 +216,25 @@ fn get_proxy() -> Option<&'static str> {
 }
 
 /// Validate a `--proxy` URL up front: it must parse, carry a host, and use a
-/// scheme smugglex can actually tunnel through. Only HTTP proxies (an `http://`
-/// or `https://` CONNECT proxy) are implemented; a `socks5://` URL would
+/// scheme smugglex can actually tunnel through. Only HTTP and HTTPS CONNECT
+/// proxies are implemented; a `socks5://` URL would
 /// otherwise be silently accepted and then have an HTTP CONNECT sent to a SOCKS
 /// port, hanging or failing per target. Rejecting it here fails fast with a
 /// clear message instead.
 pub fn validate_proxy_url(proxy_url: &str) -> Result<()> {
-    let url = Url::parse(proxy_url).map_err(|e| {
-        SmugglexError::InvalidInput(format!("invalid proxy URL '{proxy_url}': {e}"))
-    })?;
+    let url = Url::parse(proxy_url)
+        .map_err(|e| SmugglexError::InvalidInput(format!("invalid proxy URL: {e}")))?;
     match url.scheme() {
         "http" | "https" => {
             if url.host_str().is_none_or(str::is_empty) {
-                return Err(SmugglexError::InvalidInput(format!(
-                    "proxy URL '{proxy_url}' has no host"
-                )));
+                return Err(SmugglexError::InvalidInput(
+                    "proxy URL has no host".to_string(),
+                ));
             }
             Ok(())
         }
         other => Err(SmugglexError::InvalidInput(format!(
-            "unsupported proxy scheme '{other}' in '{proxy_url}'; only HTTP proxies (http:// or https://) are supported — SOCKS is not implemented"
+            "unsupported proxy scheme '{other}'; only HTTP CONNECT proxies using http:// or https:// are supported — SOCKS is not implemented"
         ))),
     }
 }
@@ -322,7 +321,7 @@ async fn get_stream_via_proxy(
     // scheme (e.g. socks5) and get a confusing connection failure.
     if !matches!(proxy.scheme(), "http" | "https") {
         return Err(SmugglexError::InvalidInput(format!(
-            "unsupported proxy scheme '{}'; only HTTP proxies are supported (SOCKS is not implemented)",
+            "unsupported proxy scheme '{}'; only HTTP and HTTPS proxies are supported (SOCKS is not implemented)",
             proxy.scheme()
         )));
     }
@@ -332,16 +331,26 @@ async fn get_stream_via_proxy(
     let proxy_port = proxy.port_or_known_default().unwrap_or(8080);
     let proxy_addr = format!("{}:{}", proxy_host, proxy_port);
 
-    let mut stream = TcpStream::connect(&proxy_addr).await.map_err(|e| {
+    let tcp = TcpStream::connect(&proxy_addr).await.map_err(|e| {
         SmugglexError::Io(format!("failed to connect to proxy {}: {}", proxy_addr, e))
     })?;
+
+    // An `https://` proxy has its own TLS layer before the CONNECT tunnel. The
+    // target TLS session, when requested, is then layered over that tunnel.
+    let mut transport: Box<dyn ReadWrite + Unpin + Send> = if proxy.scheme() == "https" {
+        let connector = TlsConnector::from(Arc::clone(get_tls_config()));
+        let domain = server_name(proxy_host)?;
+        Box::new(connector.connect(domain, tcp).await?)
+    } else {
+        Box::new(tcp)
+    };
 
     // Send CONNECT request to establish tunnel
     let connect_req = format!(
         "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n\r\n",
         host, port, host, port
     );
-    stream.write_all(connect_req.as_bytes()).await?;
+    transport.write_all(connect_req.as_bytes()).await?;
 
     // Read proxy response through a byte-limited adapter so a broken or hostile
     // proxy cannot exhaust memory: `read_line` grows its buffer until it sees a
@@ -350,7 +359,7 @@ async fn get_stream_via_proxy(
     // reader will yield; once the cap is hit `read_line` returns 0 (like EOF)
     // and the loops below terminate cleanly. 64 KiB is far beyond any real
     // CONNECT response header block.
-    let mut limited = (&mut stream).take(MAX_CONNECT_RESPONSE_BYTES as u64);
+    let mut limited = (&mut transport).take(MAX_CONNECT_RESPONSE_BYTES as u64);
     let mut reader = BufReader::new(&mut limited);
     let mut status_line = String::new();
     reader.read_line(&mut status_line).await?;
@@ -372,7 +381,7 @@ async fn get_stream_via_proxy(
             break;
         }
     }
-    // Release the borrow of `stream` before it is moved into the TLS handshake
+    // Release the borrow of `transport` before it is moved into the TLS handshake
     // or the boxed return value below.
     drop(reader);
     drop(limited);
@@ -381,10 +390,10 @@ async fn get_stream_via_proxy(
     if use_tls {
         let connector = TlsConnector::from(Arc::clone(get_tls_config()));
         let domain = server_name(host)?;
-        let tls_stream = connector.connect(domain, stream).await?;
+        let tls_stream = connector.connect(domain, transport).await?;
         Ok(Box::new(tls_stream))
     } else {
-        Ok(Box::new(stream))
+        Ok(transport)
     }
 }
 
@@ -486,14 +495,25 @@ fn chunked_body_complete(body: &[u8]) -> bool {
 /// If `buf` starts with a complete HTTP/1.x response, return its total byte
 /// length; otherwise `None`. `None` for `Connection: close`-style responses with
 /// no length signal — those are only complete at EOF.
+#[cfg(test)]
 fn response_complete_len(buf: &[u8]) -> Option<usize> {
+    response_complete_len_for(buf, false)
+}
+
+fn response_complete_len_for(buf: &[u8], head_request: bool) -> Option<usize> {
     let pos = find_subsequence(buf, b"\r\n\r\n")?;
     let header_end = pos + 4;
+    let header = String::from_utf8_lossy(&buf[..pos]);
+    let status_line = header.lines().next().unwrap_or_default();
+    let status_code = crate::utils::parse_status_code(status_line);
     // Informational responses, especially `100 Continue`, terminate at the
     // header block and do not carry the final response body.  Treating them as
     // read-to-close would make an Expect-based probe wait until the socket
     // timeout and lose the opportunity to send the request body.
-    if is_interim_response(&buf[..pos]) {
+    if is_interim_response(&buf[..pos])
+        || head_request
+        || matches!(status_code, Some(101 | 204 | 205 | 304))
+    {
         return Some(header_end);
     }
     match detect_framing(&buf[..pos]) {
@@ -530,13 +550,22 @@ const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 /// makes response-queue capture work: when a smuggled request's response arrives
 /// glued to the previous one, the surplus is preserved for the next read instead
 /// of being discarded. Returns `None` at EOF with nothing buffered.
+#[cfg(test)]
 async fn read_one_framed<S: AsyncRead + Unpin + ?Sized>(
     stream: &mut S,
     carry: &mut Vec<u8>,
 ) -> Result<Option<Vec<u8>>> {
+    read_one_framed_for(stream, carry, false).await
+}
+
+async fn read_one_framed_for<S: AsyncRead + Unpin + ?Sized>(
+    stream: &mut S,
+    carry: &mut Vec<u8>,
+    head_request: bool,
+) -> Result<Option<Vec<u8>>> {
     let mut tmp = [0u8; 8192];
     loop {
-        if let Some(end) = response_complete_len(carry) {
+        if let Some(end) = response_complete_len_for(carry, head_request) {
             let resp = carry.drain(..end).collect();
             return Ok(Some(resp));
         }
@@ -620,10 +649,18 @@ async fn read_one_http_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -
 /// precede it (for example `100 Continue`). This is used by the ordinary
 /// request path when a caller supplied an Expect header; the dedicated
 /// two-phase probe keeps those interim responses instead.
+#[cfg(test)]
 async fn read_one_final_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -> Result<Vec<u8>> {
+    read_one_final_response_for(stream, false).await
+}
+
+async fn read_one_final_response_for<S: AsyncRead + Unpin + ?Sized>(
+    stream: &mut S,
+    head_request: bool,
+) -> Result<Vec<u8>> {
     let mut carry = Vec::new();
     loop {
-        let Some(response) = read_one_framed(stream, &mut carry).await? else {
+        let Some(response) = read_one_framed_for(stream, &mut carry, head_request).await? else {
             return Ok(Vec::new());
         };
         if !is_interim_response(&response) {
@@ -662,12 +699,13 @@ pub async fn pipeline_requests(
         // offset that capture relies on) are carried between reads.
         let mut carry: Vec<u8> = Vec::new();
         for request in requests {
+            let head_request = is_head_request(request.as_bytes());
             if verbose {
                 println!("\n{}", "--- PIPELINED REQUEST ---".bold().blue());
                 println!("{}", request.cyan());
             }
             stream.write_all(request.as_bytes()).await?;
-            match read_one_framed(&mut *stream, &mut carry).await? {
+            match read_one_framed_for(&mut *stream, &mut carry, head_request).await? {
                 Some(resp) => responses.push(resp),
                 None => break, // peer closed with nothing left to read
             }
@@ -771,6 +809,8 @@ pub async fn expect_continue_sequence(
     let mut result = ExpectContinueResult::default();
     let mut carry = Vec::new();
     let deadline = Instant::now() + timeout_duration;
+    let head_request = is_head_request(params.headers.as_bytes());
+    let followup_is_head = is_head_request(params.followup.as_bytes());
 
     if params.verbose {
         println!("\n{}", "--- EXPECT HEADERS ---".bold().blue());
@@ -800,7 +840,12 @@ pub async fn expect_continue_sequence(
     // expires and the body is sent as well.
     let early_deadline = std::cmp::min(deadline, Instant::now() + params.early_wait);
     while let Some(remaining) = remaining_until(early_deadline) {
-        match tokio::time::timeout(remaining, read_one_framed(&mut *stream, &mut carry)).await {
+        match tokio::time::timeout(
+            remaining,
+            read_one_framed_for(&mut *stream, &mut carry, head_request),
+        )
+        .await
+        {
             Ok(Ok(Some(response))) => {
                 if is_interim_response(&response) {
                     result.interim_responses.push(bytes_to_string(response));
@@ -847,7 +892,7 @@ pub async fn expect_continue_sequence(
         return Ok(result);
     };
     match tokio::time::timeout(remaining, stream.write_all(params.body.as_bytes())).await {
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => result.body_sent = true,
         Ok(Err(error)) => {
             result.transport_error = Some(error.to_string());
             result.duration = started.elapsed();
@@ -865,7 +910,7 @@ pub async fn expect_continue_sequence(
         return Ok(result);
     };
     match tokio::time::timeout(remaining, stream.write_all(params.followup.as_bytes())).await {
-        Ok(Ok(())) => result.body_sent = true,
+        Ok(Ok(())) => {}
         Ok(Err(error)) => {
             result.transport_error = Some(error.to_string());
             result.duration = started.elapsed();
@@ -886,7 +931,17 @@ pub async fn expect_continue_sequence(
             result.timed_out = true;
             break;
         };
-        match tokio::time::timeout(remaining, read_one_framed(&mut *stream, &mut carry)).await {
+        let expected_head_response = if result.post_body_responses.is_empty() {
+            head_request
+        } else {
+            followup_is_head
+        };
+        match tokio::time::timeout(
+            remaining,
+            read_one_framed_for(&mut *stream, &mut carry, expected_head_response),
+        )
+        .await
+        {
             Ok(Ok(Some(response))) => {
                 if is_interim_response(&response) {
                     result.interim_responses.push(bytes_to_string(response));
@@ -913,6 +968,16 @@ pub async fn expect_continue_sequence(
 fn remaining_until(deadline: Instant) -> Option<Duration> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     (remaining > Duration::ZERO).then_some(remaining)
+}
+
+fn is_head_request(request: &[u8]) -> bool {
+    request
+        .split(|&byte| byte == b'\n')
+        .next()
+        .unwrap_or_default()
+        .split(|&byte| byte == b' ' || byte == b'\t')
+        .next()
+        .is_some_and(|method| method.eq_ignore_ascii_case(b"HEAD"))
 }
 
 fn bytes_to_string(bytes: Vec<u8>) -> String {
@@ -965,7 +1030,7 @@ pub async fn send_request_bytes(
         stream.write_all(request).await?;
         // Read exactly one final HTTP/1.x response, skipping informational
         // responses such as 100 Continue.
-        read_one_final_response(&mut *stream).await
+        read_one_final_response_for(&mut *stream, is_head_request(request)).await
     })
     .await??;
 
@@ -1165,6 +1230,13 @@ kJ8CRz+khnaPy0Io4PLR\n\
             validate_proxy_url("socks4://127.0.0.1:1080"),
             Err(SmugglexError::InvalidInput(_))
         ));
+        let credential_error = validate_proxy_url("socks5://alice:secret@127.0.0.1:1080")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !credential_error.contains("alice") && !credential_error.contains("secret"),
+            "proxy validation errors must not expose URL credentials"
+        );
         // Malformed URL and missing host are rejected too.
         assert!(matches!(
             validate_proxy_url("not a url"),
@@ -1280,6 +1352,27 @@ kJ8CRz+khnaPy0Io4PLR\n\
         // One byte short of the declared body -> not yet complete.
         let short = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nA";
         assert_eq!(response_complete_len(short), None);
+    }
+
+    #[test]
+    fn response_complete_len_handles_head_and_bodyless_statuses() {
+        let head = b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\n";
+        assert_eq!(response_complete_len_for(head, true), Some(head.len()));
+
+        let responses: &[&[u8]] = &[
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: h2c\r\nContent-Length: 12\r\n\r\n",
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 12\r\n\r\n",
+            b"HTTP/1.1 205 Reset Content\r\nContent-Length: 12\r\n\r\n",
+            b"HTTP/1.1 304 Not Modified\r\nContent-Length: 12\r\n\r\n",
+        ];
+        for response in responses {
+            assert_eq!(
+                response_complete_len_for(response, false),
+                Some(response.len()),
+                "{} should finish at the header block",
+                String::from_utf8_lossy(response).lines().next().unwrap()
+            );
+        }
     }
 
     #[test]
