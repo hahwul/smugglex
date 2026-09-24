@@ -1,10 +1,11 @@
 use colored::*;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
+use std::net::Ipv6Addr;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use url::Url;
@@ -254,6 +255,21 @@ pub(crate) fn server_name(host: &str) -> Result<ServerName<'static>> {
     Ok(ServerName::try_from(bare.to_string())?)
 }
 
+/// Format a host and port for TCP connection APIs. URL hosts normally retain
+/// IPv6 brackets, but the public networking helpers also accept a bare IPv6
+/// literal; `::1:443` is not a socket address, while `[::1]:443` is.
+pub(crate) fn socket_address(host: &str, port: u16) -> String {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if bare.parse::<Ipv6Addr>().is_ok() {
+        format!("[{bare}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 /// A trait that combines AsyncRead and AsyncWrite.
 trait ReadWrite: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite> ReadWrite for T {}
@@ -277,7 +293,7 @@ async fn get_stream_direct(
     port: u16,
     use_tls: bool,
 ) -> Result<Box<dyn ReadWrite + Unpin + Send>> {
-    let addr = format!("{}:{}", host, port);
+    let addr = socket_address(host, port);
     if use_tls {
         let connector = TlsConnector::from(Arc::clone(get_tls_config()));
         let stream = TcpStream::connect(&addr).await?;
@@ -307,6 +323,31 @@ fn connect_reply_ok(status_line: &str) -> bool {
 /// read stops rather than letting `read_line` grow its buffer without limit.
 const MAX_CONNECT_RESPONSE_BYTES: usize = 64 * 1024;
 
+/// Read a proxy CONNECT response through its terminating empty line without
+/// buffering past that boundary. A `BufReader` can prefetch the first bytes of
+/// the tunneled stream and discard them when it is dropped before the caller
+/// receives the transport.
+async fn read_connect_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -> Result<String> {
+    let mut response = Vec::new();
+    let mut byte = [0u8; 1];
+    while !response.ends_with(b"\r\n\r\n") {
+        if response.len() >= MAX_CONNECT_RESPONSE_BYTES {
+            return Err(SmugglexError::Io(
+                "proxy CONNECT response headers exceed the 64 KiB limit".to_string(),
+            ));
+        }
+        let n = stream.read(&mut byte).await?;
+        if n == 0 {
+            return Err(SmugglexError::Io(
+                "proxy CONNECT response ended before its headers were complete".to_string(),
+            ));
+        }
+        response.push(byte[0]);
+    }
+
+    Ok(String::from_utf8_lossy(&response).into_owned())
+}
+
 /// Creates a stream through an HTTP proxy using CONNECT tunnel.
 async fn get_stream_via_proxy(
     host: &str,
@@ -329,7 +370,7 @@ async fn get_stream_via_proxy(
         .host_str()
         .ok_or_else(|| SmugglexError::Io("proxy URL has no host".to_string()))?;
     let proxy_port = proxy.port_or_known_default().unwrap_or(8080);
-    let proxy_addr = format!("{}:{}", proxy_host, proxy_port);
+    let proxy_addr = socket_address(proxy_host, proxy_port);
 
     let tcp = TcpStream::connect(&proxy_addr).await.map_err(|e| {
         SmugglexError::Io(format!("failed to connect to proxy {}: {}", proxy_addr, e))
@@ -346,45 +387,21 @@ async fn get_stream_via_proxy(
     };
 
     // Send CONNECT request to establish tunnel
-    let connect_req = format!(
-        "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n\r\n",
-        host, port, host, port
-    );
+    let target_authority = socket_address(host, port);
+    let connect_req =
+        format!("CONNECT {target_authority} HTTP/1.1\r\nHost: {target_authority}\r\n\r\n");
     transport.write_all(connect_req.as_bytes()).await?;
 
-    // Read proxy response through a byte-limited adapter so a broken or hostile
-    // proxy cannot exhaust memory: `read_line` grows its buffer until it sees a
-    // newline, so a reply with an enormous line (or an endless stream of header
-    // lines) would otherwise balloon unbounded. `Take` caps the total bytes the
-    // reader will yield; once the cap is hit `read_line` returns 0 (like EOF)
-    // and the loops below terminate cleanly. 64 KiB is far beyond any real
-    // CONNECT response header block.
-    let mut limited = (&mut transport).take(MAX_CONNECT_RESPONSE_BYTES as u64);
-    let mut reader = BufReader::new(&mut limited);
-    let mut status_line = String::new();
-    reader.read_line(&mut status_line).await?;
-
-    if !connect_reply_ok(&status_line) {
+    // Read only through the header terminator. This both bounds the response
+    // and leaves any bytes already sent for the tunneled protocol untouched.
+    let response = read_connect_response(&mut *transport).await?;
+    let status_line = response.lines().next().unwrap_or_default();
+    if !connect_reply_ok(status_line) {
         return Err(SmugglexError::Io(format!(
             "proxy CONNECT failed: {}",
             status_line.trim()
         )));
     }
-
-    // Consume remaining headers until the blank line, EOF, or the byte cap.
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).await? == 0 {
-            break; // EOF or cap reached
-        }
-        if line.trim().is_empty() {
-            break;
-        }
-    }
-    // Release the borrow of `transport` before it is moved into the TLS handshake
-    // or the boxed return value below.
-    drop(reader);
-    drop(limited);
 
     // Now we have a tunnel; do TLS handshake if needed
     if use_tls {
@@ -414,24 +431,41 @@ enum BodyFraming {
 fn detect_framing(header_block: &[u8]) -> BodyFraming {
     let head = String::from_utf8_lossy(header_block);
     let mut content_length: Option<usize> = None;
-    let mut chunked = false;
+    let mut invalid_content_length = false;
+    let mut last_transfer_coding_is_chunked = None;
     // skip(1) drops the status line; the rest are header fields.
     for line in head.lines().skip(1) {
         if let Some((name, value)) = line.split_once(':') {
             let name = name.trim();
             if name.eq_ignore_ascii_case("content-length") {
-                if let Ok(n) = value.trim().parse::<usize>() {
-                    content_length = Some(n);
+                let mut values = value.split(',').map(str::trim).map(str::parse::<usize>);
+                match values.next() {
+                    Some(Ok(first))
+                        if values.all(|item| item.ok() == Some(first))
+                            && content_length.is_none_or(|existing| existing == first) =>
+                    {
+                        content_length = Some(first);
+                    }
+                    _ => invalid_content_length = true,
                 }
-            } else if name.eq_ignore_ascii_case("transfer-encoding")
-                && value.to_ascii_lowercase().contains("chunked")
-            {
-                chunked = true;
+            } else if name.eq_ignore_ascii_case("transfer-encoding") {
+                for coding in value.split(',') {
+                    last_transfer_coding_is_chunked = Some(
+                        coding
+                            .trim()
+                            .split(';')
+                            .next()
+                            .is_some_and(|token| token.trim().eq_ignore_ascii_case("chunked")),
+                    );
+                }
             }
         }
     }
+    let chunked = last_transfer_coding_is_chunked == Some(true);
     if chunked {
         BodyFraming::Chunked
+    } else if invalid_content_length {
+        BodyFraming::ReadToClose
     } else if let Some(n) = content_length {
         BodyFraming::ContentLength(n)
     } else {
@@ -476,13 +510,13 @@ fn chunked_body_end(body: &[u8]) -> Option<usize> {
         // CRLF. Use fully-checked arithmetic so a hostile server advertising a
         // near-usize::MAX chunk size cannot overflow (which would panic in debug
         // builds); such a chunk simply reads as "not yet complete".
-        match size
-            .checked_add(4)
-            .and_then(|advance| line_end.checked_add(advance))
-        {
-            Some(next) if next <= body.len() => i = next,
-            _ => return None, // chunk data not fully received (or overflow)
+        let data_start = line_end.checked_add(2)?;
+        let data_end = data_start.checked_add(size)?;
+        let next = data_end.checked_add(2)?;
+        if next > body.len() || body.get(data_end..next) != Some(b"\r\n") {
+            return None;
         }
+        i = next;
     }
 }
 
@@ -566,6 +600,12 @@ async fn read_one_framed_for<S: AsyncRead + Unpin + ?Sized>(
     let mut tmp = [0u8; 8192];
     loop {
         if let Some(end) = response_complete_len_for(carry, head_request) {
+            if end > MAX_RESPONSE_BYTES {
+                return Err(SmugglexError::HttpRequest(format!(
+                    "HTTP response exceeds the {} byte limit",
+                    MAX_RESPONSE_BYTES
+                )));
+            }
             let resp = carry.drain(..end).collect();
             return Ok(Some(resp));
         }
@@ -575,18 +615,48 @@ async fn read_one_framed_for<S: AsyncRead + Unpin + ?Sized>(
             if carry.is_empty() {
                 return Ok(None);
             }
-            return Ok(Some(std::mem::take(carry)));
+            if carry.len() > MAX_RESPONSE_BYTES {
+                return Err(SmugglexError::HttpRequest(format!(
+                    "HTTP response exceeds the {} byte limit",
+                    MAX_RESPONSE_BYTES
+                )));
+            }
+            let Some(header_end) = find_subsequence(carry, b"\r\n\r\n") else {
+                return Err(SmugglexError::HttpRequest(
+                    "HTTP response ended before its headers were complete".to_string(),
+                ));
+            };
+            return match detect_framing(&carry[..header_end]) {
+                BodyFraming::ContentLength(_) | BodyFraming::Chunked => {
+                    Err(SmugglexError::HttpRequest(
+                        "HTTP response ended before its body was complete".to_string(),
+                    ))
+                }
+                BodyFraming::ReadToClose => Ok(Some(std::mem::take(carry))),
+            };
         }
         carry.extend_from_slice(&tmp[..n]);
-        // Bound memory: if the buffer exceeds the ceiling without a complete
-        // response, stop reading and surface what we have rather than growing
-        // unbounded against a hostile/misbehaving peer. For a >32 MiB response
-        // this truncates the tail (still queued on the socket), which can
-        // desync a subsequent pipelined read on the same connection — an
-        // accepted trade: bounded memory over exact framing of pathologically
-        // large responses, which this scanner never needs to inspect in full.
-        if carry.len() >= MAX_RESPONSE_BYTES {
-            return Ok(Some(std::mem::take(carry)));
+        // A single read can contain both the end of a valid response and bytes
+        // for the next response. Check framing once more before enforcing the
+        // cap so those surplus bytes remain queued in `carry`.
+        if let Some(end) = response_complete_len_for(carry, head_request) {
+            if end > MAX_RESPONSE_BYTES {
+                return Err(SmugglexError::HttpRequest(format!(
+                    "HTTP response exceeds the {} byte limit",
+                    MAX_RESPONSE_BYTES
+                )));
+            }
+            let response = carry.drain(..end).collect();
+            return Ok(Some(response));
+        }
+        // A truncated response is not a complete response. Returning it as one
+        // would leave the unread tail on the socket and make the next pipelined
+        // read start in the middle of the same message.
+        if carry.len() > MAX_RESPONSE_BYTES {
+            return Err(SmugglexError::HttpRequest(format!(
+                "HTTP response exceeds the {} byte limit",
+                MAX_RESPONSE_BYTES
+            )));
         }
     }
 }
@@ -808,7 +878,6 @@ pub async fn expect_continue_sequence(
 
     let mut result = ExpectContinueResult::default();
     let mut carry = Vec::new();
-    let deadline = Instant::now() + timeout_duration;
     let head_request = is_head_request(params.headers.as_bytes());
     let followup_is_head = is_head_request(params.followup.as_bytes());
 
@@ -816,7 +885,7 @@ pub async fn expect_continue_sequence(
         println!("\n{}", "--- EXPECT HEADERS ---".bold().blue());
         println!("{}", params.headers.cyan());
     }
-    let Some(remaining) = remaining_until(deadline) else {
+    let Some(remaining) = remaining_budget(started, timeout_duration) else {
         result.timed_out = true;
         result.duration = started.elapsed();
         return Ok(result);
@@ -838,8 +907,12 @@ pub async fn expect_continue_sequence(
     // Wait only for an early response. If a valid 100 Continue arrives, the
     // body is sent immediately; if nothing arrives, the client-side wait
     // expires and the body is sent as well.
-    let early_deadline = std::cmp::min(deadline, Instant::now() + params.early_wait);
-    while let Some(remaining) = remaining_until(early_deadline) {
+    let early_started = Instant::now();
+    while let (Some(total_remaining), Some(early_remaining)) = (
+        remaining_budget(started, timeout_duration),
+        remaining_budget(early_started, params.early_wait),
+    ) {
+        let remaining = total_remaining.min(early_remaining);
         match tokio::time::timeout(
             remaining,
             read_one_framed_for(&mut *stream, &mut carry, head_request),
@@ -886,7 +959,7 @@ pub async fn expect_continue_sequence(
         println!("\n{}", "--- EXPECT FOLLOW-UP ---".bold().blue());
         println!("{}", params.followup.cyan());
     }
-    let Some(remaining) = remaining_until(deadline) else {
+    let Some(remaining) = remaining_budget(started, timeout_duration) else {
         result.timed_out = true;
         result.duration = started.elapsed();
         return Ok(result);
@@ -904,7 +977,7 @@ pub async fn expect_continue_sequence(
             return Ok(result);
         }
     }
-    let Some(remaining) = remaining_until(deadline) else {
+    let Some(remaining) = remaining_budget(started, timeout_duration) else {
         result.timed_out = true;
         result.duration = started.elapsed();
         return Ok(result);
@@ -927,7 +1000,7 @@ pub async fn expect_continue_sequence(
     // and the explicit follow-up. Stop after those so a healthy keep-alive
     // server is not held open until the global timeout.
     while result.post_body_responses.len() < 2 {
-        let Some(remaining) = remaining_until(deadline) else {
+        let Some(remaining) = remaining_budget(started, timeout_duration) else {
             result.timed_out = true;
             break;
         };
@@ -965,8 +1038,8 @@ pub async fn expect_continue_sequence(
     Ok(result)
 }
 
-fn remaining_until(deadline: Instant) -> Option<Duration> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
+fn remaining_budget(started: Instant, budget: Duration) -> Option<Duration> {
+    let remaining = budget.saturating_sub(started.elapsed());
     (remaining > Duration::ZERO).then_some(remaining)
 }
 
@@ -1218,6 +1291,13 @@ kJ8CRz+khnaPy0Io4PLR\n\
     }
 
     #[test]
+    fn socket_address_brackets_ipv6_literals() {
+        assert_eq!(socket_address("127.0.0.1", 8080), "127.0.0.1:8080");
+        assert_eq!(socket_address("::1", 443), "[::1]:443");
+        assert_eq!(socket_address("[::1]", 443), "[::1]:443");
+    }
+
+    #[test]
     fn validate_proxy_url_accepts_http_rejects_socks() {
         assert!(validate_proxy_url("http://127.0.0.1:8080").is_ok());
         assert!(validate_proxy_url("https://proxy.example:3128").is_ok());
@@ -1265,6 +1345,72 @@ kJ8CRz+khnaPy0Io4PLR\n\
     }
 
     #[test]
+    fn remaining_budget_handles_large_durations_without_instant_overflow() {
+        let started = Instant::now();
+        assert!(remaining_budget(started, Duration::from_secs(u64::MAX)).is_some());
+        assert!(remaining_budget(started, Duration::ZERO).is_none());
+    }
+
+    #[tokio::test]
+    async fn proxy_connect_preserves_bytes_buffered_after_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            // A proxy and its target can put the CONNECT response and the first
+            // tunneled bytes in the same TCP read. Those bytes must survive the
+            // CONNECT header parser.
+            socket
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\nTUNNEL")
+                .await
+                .unwrap();
+        });
+
+        let mut stream = get_stream_via_proxy(
+            "target.example",
+            443,
+            false,
+            &format!("http://{proxy_addr}"),
+        )
+        .await
+        .unwrap();
+        let mut tunneled = [0u8; 6];
+        stream.read_exact(&mut tunneled).await.unwrap();
+        assert_eq!(&tunneled, b"TUNNEL");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_connect_rejects_incomplete_success_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 Connection established\r\n")
+                .await
+                .unwrap();
+        });
+
+        let result = get_stream_via_proxy(
+            "target.example",
+            443,
+            false,
+            &format!("http://{proxy_addr}"),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "a 2xx line is not enough to establish a tunnel"
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
     fn find_subsequence_locates_header_terminator() {
         let buf = b"HTTP/1.1 200 OK\r\nX: y\r\n\r\nbody";
         assert_eq!(find_subsequence(buf, b"\r\n\r\n"), Some(21));
@@ -1296,6 +1442,39 @@ kJ8CRz+khnaPy0Io4PLR\n\
         // RFC 7230: Transfer-Encoding takes precedence over Content-Length.
         let head = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nTransfer-Encoding: chunked";
         assert!(matches!(detect_framing(head), BodyFraming::Chunked));
+    }
+
+    #[test]
+    fn detect_framing_requires_chunked_transfer_coding_token() {
+        // `unchunked` contains the word "chunked" but is not the chunked
+        // transfer coding. Treating substring matches as framing is unsafe.
+        let head = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: unchunked";
+        assert!(matches!(detect_framing(head), BodyFraming::ReadToClose));
+
+        // RFC 7230 requires chunked to be the final transfer coding.
+        let non_final = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip";
+        assert!(matches!(
+            detect_framing(non_final),
+            BodyFraming::ReadToClose
+        ));
+        let final_coding = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked";
+        assert!(matches!(detect_framing(final_coding), BodyFraming::Chunked));
+    }
+
+    #[test]
+    fn detect_framing_accepts_identical_repeated_content_lengths() {
+        // HTTP permits repeated Content-Length values when every value agrees.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 5";
+        assert!(matches!(
+            detect_framing(head),
+            BodyFraming::ContentLength(5)
+        ));
+
+        let comma_separated = b"HTTP/1.1 200 OK\r\nContent-Length: 5, 5";
+        assert!(matches!(
+            detect_framing(comma_separated),
+            BodyFraming::ContentLength(5)
+        ));
     }
 
     #[test]
@@ -1335,6 +1514,13 @@ kJ8CRz+khnaPy0Io4PLR\n\
             b"5\r\nhello\r\n0\r\nServer: nginx\r\n"
         )); // trailers unterminated
         assert!(!chunked_body_complete(b"")); // nothing yet
+    }
+
+    #[test]
+    fn chunked_complete_requires_data_terminating_crlf() {
+        // Without the CRLF after "hello", the following zero-size chunk is
+        // not aligned to a valid chunk boundary and must not complete the body.
+        assert!(!chunked_body_complete(b"5\r\nhelloXX0\r\n\r\n"));
     }
 
     #[test]
@@ -1423,6 +1609,21 @@ kJ8CRz+khnaPy0Io4PLR\n\
     }
 
     #[tokio::test]
+    async fn read_one_framed_rejects_truncated_length_framed_response() {
+        for data in [
+            &b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabc"[..],
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nabc"[..],
+        ] {
+            let mut slice: &[u8] = data;
+            let mut carry = Vec::new();
+            assert!(
+                read_one_framed(&mut slice, &mut carry).await.is_err(),
+                "EOF before a declared response body is not a complete response"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn read_one_http_response_caps_unbounded_body() {
         // A `Connection: close`-style response with no length signal frames as
         // `ReadToClose`, so the read accumulates until EOF. Feed a body larger
@@ -1437,18 +1638,19 @@ kJ8CRz+khnaPy0Io4PLR\n\
     }
 
     #[tokio::test]
-    async fn read_one_framed_caps_unbounded_buffer() {
+    async fn read_one_framed_rejects_unbounded_buffer() {
         // A `ReadToClose` response is never "complete" until EOF, so without a
         // ceiling `carry` would accumulate the whole stream. It must instead
-        // surface a capped buffer.
+        // return an error rather than surface a truncated response as complete.
         let mut data = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
         data.extend(std::iter::repeat_n(b'A', MAX_RESPONSE_BYTES + 4096));
         let mut slice: &[u8] = &data;
         let mut carry = Vec::new();
-        let out = read_one_framed(&mut slice, &mut carry).await.unwrap();
-        let out = out.expect("capped buffer should be returned, not None");
-        assert!(out.len() >= MAX_RESPONSE_BYTES);
-        assert!(out.len() < data.len(), "buffer should be capped, not full");
+        let result = read_one_framed(&mut slice, &mut carry).await;
+        assert!(
+            result.is_err(),
+            "a truncated response must not be reported as complete"
+        );
     }
 
     #[tokio::test]
