@@ -22,7 +22,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
-use crate::error::Result;
+use crate::error::{Result, SmugglexError};
 use crate::model::{CheckResult, Confidence};
 
 /// HTTP/2 client connection preface (RFC 9113 §3.4).
@@ -180,16 +180,23 @@ impl H2Request<'_> {
 
 // ----------------------------- frame I/O -----------------------------------
 
-fn put_frame(out: &mut Vec<u8>, ftype: u8, flags: u8, stream: u32, payload: &[u8]) {
+const MAX_FRAME_PAYLOAD: usize = 0xFF_FFFF;
+
+fn validate_frame_payload_len(len: usize) -> Result<()> {
+    if len > MAX_FRAME_PAYLOAD {
+        return Err(SmugglexError::InvalidInput(format!(
+            "HTTP/2 frame payload ({len} bytes) exceeds the 24-bit length limit"
+        )));
+    }
+    Ok(())
+}
+
+fn put_frame(out: &mut Vec<u8>, ftype: u8, flags: u8, stream: u32, payload: &[u8]) -> Result<()> {
     let len = payload.len();
-    // The frame length field is 24 bits. All payloads smugglex emits are tiny
-    // (a small HPACK header block or a few-byte DATA body), so exceeding this
-    // would be a bug — guard it rather than silently truncating into a corrupt
-    // frame that desyncs the whole outbound stream.
-    debug_assert!(
-        len <= 0xFF_FFFF,
-        "HTTP/2 frame payload ({len} bytes) exceeds the 24-bit length field"
-    );
+    // The frame length field is 24 bits. Reject an oversized caller-supplied
+    // header or body instead of silently truncating into a corrupt frame in
+    // release builds.
+    validate_frame_payload_len(len)?;
     out.push((len >> 16) as u8);
     out.push((len >> 8) as u8);
     out.push(len as u8);
@@ -197,6 +204,7 @@ fn put_frame(out: &mut Vec<u8>, ftype: u8, flags: u8, stream: u32, payload: &[u8
     out.push(flags);
     out.extend_from_slice(&(stream & 0x7fff_ffff).to_be_bytes());
     out.extend_from_slice(payload);
+    Ok(())
 }
 
 /// Outcome of one HTTP/2 probe.
@@ -226,12 +234,26 @@ fn headers_block_offset(flags: u8) -> usize {
     offset
 }
 
+/// Return the HPACK block after the optional HEADERS-frame prefix and padding.
+/// A malformed pad length must not make the padding bytes look like header
+/// fields or cause a status byte beyond the payload to be read.
+fn headers_block(payload: &[u8], flags: u8) -> Option<&[u8]> {
+    let padding = if flags & FLAG_PADDED != 0 {
+        usize::from(*payload.first()?)
+    } else {
+        0
+    };
+    let offset = headers_block_offset(flags);
+    let end = payload.len().checked_sub(padding)?;
+    (offset <= end).then_some(&payload[offset..end])
+}
+
 /// Decode the response `:status` from a HEADERS frame payload, honoring the
 /// PADDED/PRIORITY prefix so the status byte is read from the actual start of
 /// the HPACK block rather than blindly from offset 0.
 fn headers_status(payload: &[u8], flags: u8) -> Option<u16> {
-    payload
-        .get(headers_block_offset(flags))
+    headers_block(payload, flags)?
+        .first()
         .copied()
         .and_then(status_from_indexed)
 }
@@ -257,7 +279,7 @@ async fn h2_connect(host: &str, port: u16) -> Result<tokio_rustls::client::TlsSt
     // `[::1]` as a hostname and fails to resolve, whereas `[::1]:port` parses as
     // a socket address. The SNI name goes through the shared bracket-aware
     // `server_name` helper.
-    let tcp = TcpStream::connect(format!("{host}:{port}")).await?;
+    let tcp = TcpStream::connect(crate::http::socket_address(host, port)).await?;
     let dnsname = crate::http::server_name(host)?;
     let tls = connector.connect(dnsname, tcp).await?;
     Ok(tls)
@@ -280,15 +302,15 @@ async fn h2_probe(
 
         let mut out = Vec::new();
         out.extend_from_slice(PREFACE);
-        put_frame(&mut out, FRAME_SETTINGS, 0, 0, &[]);
+        put_frame(&mut out, FRAME_SETTINGS, 0, 0, &[])?;
         let hb = req.header_block();
         let mut hflags = FLAG_END_HEADERS;
         if end_stream_on_headers {
             hflags |= FLAG_END_STREAM;
         }
-        put_frame(&mut out, FRAME_HEADERS, hflags, 1, &hb);
+        put_frame(&mut out, FRAME_HEADERS, hflags, 1, &hb)?;
         if !end_stream_on_headers {
-            put_frame(&mut out, FRAME_DATA, FLAG_END_STREAM, 1, req.body);
+            put_frame(&mut out, FRAME_DATA, FLAG_END_STREAM, 1, req.body)?;
         }
         stream.write_all(&out).await?;
 
@@ -418,7 +440,7 @@ async fn read_response<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) -> Res
             } => {
                 if send_settings_ack {
                     let mut ack = Vec::new();
-                    put_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[]);
+                    put_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[])?;
                     stream.write_all(&ack).await?;
                 }
                 return Ok(outcome);
@@ -429,7 +451,7 @@ async fn read_response<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) -> Res
             } => {
                 if send_settings_ack {
                     let mut ack = Vec::new();
-                    put_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[]);
+                    put_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[])?;
                     stream.write_all(&ack).await?;
                 }
                 acc.drain(0..consumed);
@@ -792,12 +814,19 @@ mod tests {
             FLAG_END_HEADERS | FLAG_END_STREAM,
             1,
             b"xy",
-        );
+        )
+        .unwrap();
         assert_eq!(&out[0..3], &[0, 0, 2]); // length
         assert_eq!(out[3], FRAME_HEADERS);
         assert_eq!(out[4], 0x5);
         assert_eq!(&out[5..9], &[0, 0, 0, 1]); // stream 1
         assert_eq!(&out[9..11], b"xy");
+    }
+
+    #[test]
+    fn frame_writer_rejects_payload_over_24_bit_limit() {
+        assert!(validate_frame_payload_len(MAX_FRAME_PAYLOAD).is_ok());
+        assert!(validate_frame_payload_len(MAX_FRAME_PAYLOAD + 1).is_err());
     }
 
     #[test]
@@ -829,7 +858,7 @@ mod tests {
     #[test]
     fn scan_frames_decodes_headers_status() {
         let mut acc = Vec::new();
-        put_frame(&mut acc, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]); // :status 200
+        put_frame(&mut acc, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]).unwrap(); // :status 200
         match scan_frames(&acc) {
             FrameScan::Outcome { outcome, .. } => {
                 assert!(outcome.responded);
@@ -860,7 +889,8 @@ mod tests {
             FLAG_END_HEADERS | FLAG_PADDED,
             1,
             &payload,
-        );
+        )
+        .unwrap();
         match scan_frames(&acc) {
             FrameScan::Outcome { outcome, .. } => {
                 assert!(outcome.responded);
@@ -881,7 +911,8 @@ mod tests {
             FLAG_END_HEADERS | FLAG_PRIORITY,
             1,
             &payload,
-        );
+        )
+        .unwrap();
         match scan_frames(&acc) {
             FrameScan::Outcome { outcome, .. } => {
                 assert!(outcome.responded);
@@ -903,10 +934,18 @@ mod tests {
     }
 
     #[test]
+    fn headers_status_rejects_padding_that_overruns_payload() {
+        // The pad length byte belongs to the HEADERS prefix; padding cannot
+        // consume the HPACK block itself.
+        assert_eq!(headers_status(&[0x03, 0x88], FLAG_PADDED), None);
+        assert_eq!(headers_status(&[0x01, 0x88, 0x00], FLAG_PADDED), Some(200));
+    }
+
+    #[test]
     fn scan_frames_acks_settings_before_headers() {
         let mut acc = Vec::new();
-        put_frame(&mut acc, FRAME_SETTINGS, 0, 0, &[]); // server SETTINGS (needs ACK)
-        put_frame(&mut acc, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]);
+        put_frame(&mut acc, FRAME_SETTINGS, 0, 0, &[]).unwrap(); // server SETTINGS (needs ACK)
+        put_frame(&mut acc, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]).unwrap();
         match scan_frames(&acc) {
             FrameScan::Outcome {
                 outcome,
@@ -922,13 +961,13 @@ mod tests {
     #[test]
     fn scan_frames_maps_rst_and_goaway_to_reset() {
         let mut rst = Vec::new();
-        put_frame(&mut rst, FRAME_RST_STREAM, 0, 1, &[0, 0, 0, 0]);
+        put_frame(&mut rst, FRAME_RST_STREAM, 0, 1, &[0, 0, 0, 0]).unwrap();
         match scan_frames(&rst) {
             FrameScan::Outcome { outcome, .. } => assert!(outcome.reset && !outcome.responded),
             _ => panic!("RST_STREAM(1) should be terminal"),
         }
         let mut goaway = Vec::new();
-        put_frame(&mut goaway, FRAME_GOAWAY, 0, 0, &[0, 0, 0, 0, 0, 0, 0, 0]);
+        put_frame(&mut goaway, FRAME_GOAWAY, 0, 0, &[0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
         match scan_frames(&goaway) {
             FrameScan::Outcome { outcome, .. } => assert!(outcome.reset),
             _ => panic!("GOAWAY should be terminal"),
@@ -958,7 +997,7 @@ mod tests {
     #[test]
     fn scan_frames_drains_settings_then_awaits_partial_headers() {
         let mut acc = Vec::new();
-        put_frame(&mut acc, FRAME_SETTINGS, 0, 0, &[]); // 9 bytes, fully present
+        put_frame(&mut acc, FRAME_SETTINGS, 0, 0, &[]).unwrap(); // 9 bytes, fully present
         acc.extend_from_slice(&[0, 0, 10, FRAME_HEADERS, FLAG_END_HEADERS, 0, 0, 0, 1]); // partial
         match scan_frames(&acc) {
             FrameScan::NeedMore {
@@ -976,8 +1015,8 @@ mod tests {
     async fn read_response_decodes_headers_over_duplex() {
         let (mut server, mut client) = tokio::io::duplex(4096);
         let mut frames = Vec::new();
-        put_frame(&mut frames, FRAME_SETTINGS, 0, 0, &[]);
-        put_frame(&mut frames, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]);
+        put_frame(&mut frames, FRAME_SETTINGS, 0, 0, &[]).unwrap();
+        put_frame(&mut frames, FRAME_HEADERS, FLAG_END_HEADERS, 1, &[0x88]).unwrap();
         server.write_all(&frames).await.unwrap();
         let outcome = read_response(&mut client).await.unwrap();
         assert!(outcome.responded);
