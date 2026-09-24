@@ -77,16 +77,10 @@ impl fmt::Display for FingerprintResult {
 /// Parse HTTP response headers into a map (lowercase keys).
 fn parse_response_headers(response: &str) -> HashMap<String, String> {
     let mut headers = HashMap::new();
-    for line in response.lines() {
-        if line.starts_with("HTTP/") {
-            continue;
-        }
-        // The first blank line terminates the header section; stop here so the
-        // response body is never parsed as headers. (Previously this used
-        // `continue`, letting body lines that contain ':' leak in as headers.)
-        if line.trim().is_empty() {
-            break;
-        }
+    let Some(header_end) = response.find("\r\n\r\n") else {
+        return headers;
+    };
+    for line in response[..header_end].lines().skip(1) {
         if let Some((key, value)) = line.split_once(':') {
             headers.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
         }
@@ -94,8 +88,9 @@ fn parse_response_headers(response: &str) -> HashMap<String, String> {
     headers
 }
 
-/// True when `needle` appears in `haystack` as a whole word — bounded by a
-/// non-alphanumeric byte (or a string edge) on both sides.
+/// True when `needle` appears in `haystack` as a whole token — bounded by a
+/// non-word byte (ASCII letters, digits, and underscore are word bytes) or a
+/// string edge on both sides.
 ///
 /// Short product tokens such as `ats` (Apache Traffic Server) and `iis` are
 /// otherwise matched as bare substrings, misidentifying unrelated servers like
@@ -103,11 +98,12 @@ fn parse_response_headers(response: &str) -> HashMap<String, String> {
 /// word boundary keeps `ATS/9.2` and `Microsoft-IIS/10.0` matching while
 /// rejecting the false positives.
 fn contains_word(haystack: &str, needle: &str) -> bool {
+    let is_word_byte = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
     let bytes = haystack.as_bytes();
     haystack.match_indices(needle).any(|(start, _)| {
-        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
         let end = start + needle.len();
-        let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        let after_ok = end == bytes.len() || !is_word_byte(bytes[end]);
         before_ok && after_ok
     })
 }
@@ -125,7 +121,7 @@ fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
         return ProxyType::Varnish;
     }
     if let Some(val) = headers.get("x-served-by")
-        && val.contains("cache-")
+        && val.to_ascii_lowercase().contains("cache-")
     {
         return ProxyType::Fastly;
     }
@@ -153,8 +149,8 @@ fn identify_proxy(headers: &HashMap<String, String>) -> ProxyType {
         // which contains the substring "apache". Detect it BEFORE the generic
         // Apache branch, otherwise an ATS instance is misidentified as Apache
         // and the check-ordering heuristic keyed off it is wrong.
-        if server_lower.contains("trafficserver")
-            || server_lower.contains("traffic server")
+        if contains_word(&server_lower, "trafficserver")
+            || contains_word(&server_lower, "traffic server")
             || contains_word(&server_lower, "ats")
         {
             return ProxyType::ATS;
@@ -297,6 +293,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_response_headers_ignores_truncated_header_blocks() {
+        let response =
+            "HTTP/1.1 200 OK\r\nServer: fake-proxy\r\nContent-Length: 12\r\nbody: not headers";
+        let headers = parse_response_headers(response);
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn parse_response_headers_does_not_use_lf_in_the_body_as_a_boundary() {
+        let response = "HTTP/1.1 200 OK\nServer: fake-proxy\n\nbody: not headers";
+        assert!(parse_response_headers(response).is_empty());
+    }
+
+    #[test]
     fn test_identify_nginx() {
         let mut headers = HashMap::new();
         headers.insert("server".to_string(), "nginx/1.24.0".to_string());
@@ -431,6 +441,13 @@ mod tests {
     }
 
     #[test]
+    fn test_identify_fastly_case_insensitively() {
+        let mut headers = HashMap::new();
+        headers.insert("x-served-by".to_string(), "Cache-LAX12345".to_string());
+        assert_eq!(identify_proxy(&headers), ProxyType::Fastly);
+    }
+
+    #[test]
     fn test_identify_apache() {
         let mut headers = HashMap::new();
         headers.insert("server".to_string(), "Apache/2.4.52".to_string());
@@ -502,6 +519,16 @@ mod tests {
     }
 
     #[test]
+    fn trafficserver_detection_requires_a_token_boundary() {
+        let mut headers = HashMap::new();
+        headers.insert("server".to_string(), "MyTrafficServer/1.0".to_string());
+        assert_eq!(
+            identify_proxy(&headers),
+            ProxyType::Unknown("MyTrafficServer/1.0".to_string())
+        );
+    }
+
+    #[test]
     fn ats_substring_is_not_a_false_positive() {
         // A Server header that merely *contains* "ats" (e.g. a stats service)
         // must NOT be fingerprinted as Apache Traffic Server.
@@ -531,5 +558,6 @@ mod tests {
         assert!(!contains_word("stats-server", "ats"));
         assert!(!contains_word("wiisu", "iis"));
         assert!(!contains_word("ats9", "ats")); // glued to a digit → not a word
+        assert!(!contains_word("my_ats_server", "ats")); // underscore is part of a token
     }
 }

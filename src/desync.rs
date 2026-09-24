@@ -14,6 +14,7 @@ use crate::http::{
 };
 use crate::model::{CheckResult, Confidence};
 use crate::payloads::{format_cookies, format_custom_headers};
+use crate::scanner::response_body_length;
 use crate::utils::parse_status_code;
 use chrono::Utc;
 use indicatif::ProgressBar;
@@ -135,7 +136,7 @@ pub async fn run_cl0_check(params: ConnectionDesyncParams<'_>) -> Result<CheckRe
     )
     .await?;
     let baseline = observe_response(&baseline_raw);
-    if baseline.status_line.is_empty() {
+    if baseline.status_line.is_empty() || baseline.status_code.is_none() {
         return Ok(clean_result(
             "cl0_baseline_no_response",
             "cl-0",
@@ -291,7 +292,7 @@ pub async fn run_zero_cl_check(params: ConnectionDesyncParams<'_>) -> Result<Che
     )
     .await?;
     let baseline = observe_response(&baseline_raw);
-    if baseline.status_line.is_empty() {
+    if baseline.status_line.is_empty() || baseline.status_code.is_none() {
         return Ok(clean_result(
             "zero_cl_baseline_no_response",
             "0-cl",
@@ -639,10 +640,7 @@ fn observe_response(response: &str) -> ResponseObservation {
     ResponseObservation {
         status_code: parse_status_code(&status_line),
         status_line,
-        body_length: response
-            .split_once("\r\n\r\n")
-            .map(|(_, body)| body.len())
-            .unwrap_or_default(),
+        body_length: response_body_length(response),
     }
 }
 
@@ -672,7 +670,7 @@ fn queue_shift_signals(
 }
 
 fn responses_equivalent(left: &ResponseObservation, right: &ResponseObservation) -> bool {
-    left.status_code == right.status_code
+    matches!((left.status_code, right.status_code), (Some(left), Some(right)) if left == right)
         && !body_structurally_diverges(left.body_length, right.body_length)
 }
 
@@ -681,13 +679,18 @@ fn response_difference_signals(
     attack: &ResponseObservation,
 ) -> Vec<String> {
     let mut signals = Vec::new();
-    if control.status_code != attack.status_code {
+    if let (Some(control_status), Some(attack_status)) = (control.status_code, attack.status_code)
+        && control_status != attack_status
+    {
         signals.push(format!(
-            "followup_status_shift:{}->{:?}",
-            control.status_line, attack.status_code
+            "followup_status_shift:{}->{attack_status:?}",
+            control.status_line
         ));
     }
-    if body_structurally_diverges(control.body_length, attack.body_length) {
+    if control.status_code.is_some()
+        && attack.status_code.is_some()
+        && body_structurally_diverges(control.body_length, attack.body_length)
+    {
         signals.push(format!(
             "followup_body_shift:{}->{}",
             control.body_length, attack.body_length
@@ -748,7 +751,9 @@ fn zero_cl_signals(
         .post_body_responses
         .iter()
         .map(|response| observe_response(response))
-        .find(|response| !responses_equivalent(baseline, response));
+        .find(|response| {
+            response.status_code.is_some() && !responses_equivalent(baseline, response)
+        });
     let Some(shifted) = shifted else {
         return Vec::new();
     };
@@ -757,7 +762,11 @@ fn zero_cl_signals(
         "early_response_before_body".to_string(),
         "control_followup_matches_baseline".to_string(),
     ];
-    signals.extend(response_difference_signals(baseline, &shifted));
+    let difference_signals = response_difference_signals(baseline, &shifted);
+    if difference_signals.is_empty() {
+        return Vec::new();
+    }
+    signals.extend(difference_signals);
     signals
 }
 
@@ -854,6 +863,34 @@ mod tests {
     }
 
     #[test]
+    fn response_equivalence_requires_parseable_status_codes() {
+        let valid = observe_response("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let malformed = observe_response("not an HTTP response\r\n\r\nlarge body");
+        assert!(!responses_equivalent(&malformed, &malformed));
+        assert!(!responses_equivalent(&valid, &malformed));
+    }
+
+    #[test]
+    fn malformed_followup_does_not_create_a_queue_shift_signal() {
+        let baseline = observe_response("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let control = SequenceObservation {
+            responses: vec![
+                observe_response("HTTP/1.1 200 OK\r\n\r\nsetup"),
+                observe_response("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"),
+            ],
+            duration: Duration::from_millis(1),
+        };
+        let attack = SequenceObservation {
+            responses: vec![
+                observe_response("HTTP/1.1 200 OK\r\n\r\nsetup"),
+                observe_response("not an HTTP response\r\n\r\nlarge body"),
+            ],
+            duration: Duration::from_millis(1),
+        };
+        assert!(queue_shift_signals(&baseline, &control, &attack).is_empty());
+    }
+
+    #[test]
     fn zero_cl_cases_keep_control_and_attack_lengths_equal() {
         let headers = vec!["Authorization: Bearer test".to_string()];
         let cookies = Vec::new();
@@ -922,5 +959,25 @@ mod tests {
             ..control
         };
         assert!(zero_cl_signals(&baseline, &same_control, &ordinary_rejection).is_empty());
+    }
+
+    #[test]
+    fn zero_cl_ignores_malformed_post_body_response() {
+        let baseline = observe_response("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let control = ExpectContinueResult {
+            post_body_responses: vec![
+                "HTTP/1.1 200 OK\r\n\r\nsetup".to_string(),
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK".to_string(),
+            ],
+            body_sent: true,
+            ..Default::default()
+        };
+        let attack = ExpectContinueResult {
+            early_response: Some("HTTP/1.1 404 Not Found\r\n\r\n".to_string()),
+            post_body_responses: vec!["not an HTTP response\r\n\r\nlarge body".to_string()],
+            body_sent: true,
+            ..Default::default()
+        };
+        assert!(zero_cl_signals(&baseline, &control, &attack).is_empty());
     }
 }
