@@ -9,6 +9,7 @@
 //! manage `Content-Length` / `Transfer-Encoding` themselves.
 
 use crate::error::{Result, SmugglexError};
+use std::net::Ipv6Addr;
 
 /// Headers that the smuggling payload generators add or control on their own.
 /// They are stripped from a raw request so we never emit duplicates or fight
@@ -54,7 +55,12 @@ impl RawRequest {
         let scheme = self.scheme.as_deref().unwrap_or(proto_default);
         let use_tls = scheme == "https";
         let port = self.port.unwrap_or(if use_tls { 443 } else { 80 });
-        format!("{}://{}:{}/", scheme, self.host, port)
+        let authority = if self.host.parse::<Ipv6Addr>().is_ok() {
+            format!("[{}]:{}", self.host, port)
+        } else {
+            format!("{}:{}", self.host, port)
+        };
+        format!("{}://{}/", scheme, authority)
     }
 }
 
@@ -78,7 +84,16 @@ pub fn merge_headers(mut captured: Vec<String>, user: &[String]) -> Vec<String> 
 /// (`GET https://host/path HTTP/1.1`) derive the host, port and scheme from the
 /// line itself.
 pub fn parse_raw_request(content: &str) -> Result<RawRequest> {
-    let mut lines = content.split('\n').map(|l| l.trim_end_matches('\r'));
+    // Normalize CRLF to LF before splitting so a trailing single CRLF after the
+    // last header cannot be mistaken for the required blank separator. The
+    // separator is the first exact empty line, represented by `\n\n` here.
+    let normalized = content.replace("\r\n", "\n");
+    let (header_section, body) = normalized.split_once("\n\n").ok_or_else(|| {
+        SmugglexError::InvalidInput(
+            "raw request is missing the blank line that terminates its headers".to_string(),
+        )
+    })?;
+    let mut lines = header_section.split('\n').map(|l| l.trim_end_matches('\r'));
 
     let request_line = lines
         .by_ref()
@@ -100,18 +115,28 @@ pub fn parse_raw_request(content: &str) -> Result<RawRequest> {
             SmugglexError::InvalidInput("raw request missing request target".to_string())
         })?
         .to_string();
+    let version = parts.next().ok_or_else(|| {
+        SmugglexError::InvalidInput("raw request missing HTTP version".to_string())
+    })?;
+    if !matches!(
+        version.to_ascii_uppercase().as_str(),
+        "HTTP/1.0" | "HTTP/1.1"
+    ) {
+        return Err(SmugglexError::InvalidInput(format!(
+            "unsupported HTTP version '{version}'; expected HTTP/1.0 or HTTP/1.1"
+        )));
+    }
+    if parts.next().is_some() {
+        return Err(SmugglexError::InvalidInput(
+            "raw request line has unexpected extra tokens".to_string(),
+        ));
+    }
 
     // Headers run until the first blank line; everything after is the body.
     let mut headers: Vec<String> = Vec::new();
     let mut host_header: Option<String> = None;
-    let mut had_body = false;
-    while let Some(line) = lines.next() {
-        if line.trim().is_empty() {
-            // Header section ends at the blank line; any non-empty line after it is
-            // the message body (discarded, but recorded so the CLI can note it).
-            had_body = lines.any(|l| !l.trim().is_empty());
-            break;
-        }
+    let had_body = !body.is_empty();
+    for line in lines {
         let Some((name, value)) = line.split_once(':') else {
             // Not a well-formed header line (e.g. an obsolete folded continuation);
             // skip it rather than emitting something malformed.
@@ -373,6 +398,31 @@ mod tests {
         let raw = "GET / HTTP/1.1\nHost: example.com\nAccept: */*\n\n";
         let parsed = parse_raw_request(raw).unwrap();
         assert_eq!(parsed.headers, vec!["Accept: */*".to_string()]);
+    }
+
+    #[test]
+    fn rejects_request_line_with_extra_tokens() {
+        let raw = "GET / HTTP/1.1 unexpected\r\nHost: example.com\r\n\r\n";
+        assert!(matches!(
+            parse_raw_request(raw),
+            Err(SmugglexError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_request_without_header_terminator() {
+        let raw = "GET / HTTP/1.1\r\nHost: example.com\r\n";
+        assert!(matches!(
+            parse_raw_request(raw),
+            Err(SmugglexError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn whitespace_only_line_does_not_end_header_section() {
+        let raw = "GET / HTTP/1.1\r\nHost: example.com\r\n \r\nX-Trace: retained\r\n\r\n";
+        let parsed = parse_raw_request(raw).unwrap();
+        assert_eq!(parsed.headers, vec!["X-Trace: retained".to_string()]);
     }
 
     #[test]
@@ -674,6 +724,12 @@ mod tests {
     }
 
     #[test]
+    fn connect_url_brackets_bare_ipv6() {
+        let raw = parse_raw_request("GET /a HTTP/1.1\r\nHost: ::1\r\n\r\n").unwrap();
+        assert_eq!(raw.connect_url("http"), "http://[::1]:80/");
+    }
+
+    #[test]
     fn split_host_port_ignores_non_numeric() {
         assert_eq!(
             split_host_port("example.com").unwrap(),
@@ -756,10 +812,16 @@ mod tests {
         let with_body = "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 3\r\n\r\nabc";
         assert!(parse_raw_request(with_body).unwrap().had_body);
 
-        // No body, or only a trailing blank line, is not counted as a body.
+        // Whitespace is still body bytes. It must not disappear merely because
+        // the parser trims lines while reading the header section.
+        let whitespace_body = "POST /x HTTP/1.1\r\nHost: h\r\n\r\n\r\n";
+        assert!(parse_raw_request(whitespace_body).unwrap().had_body);
+
+        // An exact header terminator has no bytes after it; an additional CRLF
+        // is a one-line (whitespace) message body and is counted.
         let no_body = "GET /x HTTP/1.1\r\nHost: h\r\n\r\n";
         assert!(!parse_raw_request(no_body).unwrap().had_body);
         let trailing_blank = "GET /x HTTP/1.1\r\nHost: h\r\n\r\n\r\n";
-        assert!(!parse_raw_request(trailing_blank).unwrap().had_body);
+        assert!(parse_raw_request(trailing_blank).unwrap().had_body);
     }
 }
