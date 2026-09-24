@@ -101,20 +101,13 @@ impl Mutator {
         // and was dropped, so this strategy produced nothing for a large class of
         // TE payloads. Insert the whitespace right after the header's colon,
         // searching only within the header line so a colon elsewhere can't be hit.
-        if let Some(start) = find_case_insensitive(payload, "transfer-encoding") {
-            let name_end = start + "Transfer-Encoding".len();
-            let line_end = payload[name_end..]
-                .find("\r\n")
-                .map(|rel| name_end + rel)
-                .unwrap_or(payload.len());
-            if let Some(colon_rel) = payload[name_end..line_end].find(':') {
-                let insert_at = name_end + colon_rel + 1;
-                let mut result = String::with_capacity(payload.len() + 2);
-                result.push_str(&payload[..insert_at]);
-                result.push_str(ws);
-                result.push_str(&payload[insert_at..]);
-                return result;
-            }
+        if let Some(header) = find_header_case_insensitive(payload, "transfer-encoding") {
+            let insert_at = header.colon + 1;
+            let mut result = String::with_capacity(payload.len() + 2);
+            result.push_str(&payload[..insert_at]);
+            result.push_str(ws);
+            result.push_str(&payload[insert_at..]);
+            return result;
         }
         payload.to_string()
     }
@@ -130,12 +123,11 @@ impl Mutator {
             "TRANSFER-Encoding",
         ];
 
-        if let Some(start) = find_case_insensitive(payload, "transfer-encoding") {
-            let end = start + "Transfer-Encoding".len();
+        if let Some(header) = find_header_case_insensitive(payload, "transfer-encoding") {
             let variant = te_variants[self.rand_index(te_variants.len())];
-            let mut result = payload[..start].to_string();
+            let mut result = payload[..header.name_start].to_string();
             result.push_str(variant);
-            result.push_str(&payload[end..]);
+            result.push_str(&payload[header.name_end..]);
             result
         } else {
             payload.to_string()
@@ -144,9 +136,8 @@ impl Mutator {
 
     /// Strategy 3: Modify Content-Length value (leading zeros, off-by-one, trailing space).
     fn mutate_cl_value(&mut self, payload: &str) -> String {
-        if let Some(start) = find_case_insensitive(payload, "content-length:") {
-            let after_header = start + "Content-Length:".len();
-            let rest = &payload[after_header..];
+        if let Some(header) = find_header_case_insensitive(payload, "content-length") {
+            let rest = &payload[header.value_start..header.value_end];
             // Find the numeric value
             let trimmed = rest.trim_start();
             let skip_ws = rest.len() - trimmed.len();
@@ -167,7 +158,7 @@ impl Mutator {
                     3 => format!(" {}", val),                  // leading space
                     _ => format!("{}", val),
                 };
-                let value_start = after_header + skip_ws;
+                let value_start = header.value_start + skip_ws;
                 let value_end = value_start + num_end;
                 let mut result = payload[..value_start].to_string();
                 result.push_str(&new_val);
@@ -199,26 +190,21 @@ impl Mutator {
         ];
         let junk = junk_headers[self.rand_index(junk_headers.len())];
 
-        if let Some(pos) = find_case_insensitive(payload, "transfer-encoding") {
+        if let Some(header) = find_header_case_insensitive(payload, "transfer-encoding") {
             let before = self.rand_index(2) == 0;
             if before {
                 // Find start of line (previous \n)
-                let line_start = payload[..pos].rfind('\n').map(|p| p + 1).unwrap_or(pos);
-                let mut result = payload[..line_start].to_string();
+                let mut result = payload[..header.line_start].to_string();
                 result.push_str(junk);
                 result.push_str("\r\n");
-                result.push_str(&payload[line_start..]);
+                result.push_str(&payload[header.line_start..]);
                 result
             } else {
                 // Find end of TE line
-                let line_end = payload[pos..]
-                    .find("\r\n")
-                    .map(|p| pos + p + 2)
-                    .unwrap_or(payload.len());
-                let mut result = payload[..line_end].to_string();
+                let mut result = payload[..header.line_end].to_string();
                 result.push_str(junk);
                 result.push_str("\r\n");
-                result.push_str(&payload[line_end..]);
+                result.push_str(&payload[header.line_end..]);
                 result
             }
         } else {
@@ -232,15 +218,15 @@ impl Mutator {
         match mutation {
             0 => {
                 // Leading zeros on chunk size: "1\r\n" -> "001\r\n"
-                payload.replacen("1\r\nA", "001\r\nA", 1)
+                replace_first_in_body(payload, b"1\r\nA", "001\r\nA")
             }
             1 => {
                 // Chunk extension: "1\r\nA" -> "1;ext=val\r\nA"
-                payload.replacen("1\r\nA", "1;ext=val\r\nA", 1)
+                replace_first_in_body(payload, b"1\r\nA", "1;ext=val\r\nA")
             }
             2 => {
                 // Whitespace after chunk size: "0\r\n\r\n" -> "0 \r\n\r\n"
-                payload.replacen("0\r\n\r\n", "0 \r\n\r\n", 1)
+                replace_first_in_body(payload, b"0\r\n\r\n", "0 \r\n\r\n")
             }
             _ => payload.to_string(),
         }
@@ -251,8 +237,9 @@ impl Mutator {
         let ctrl_chars = ["\x00", "\x0B", "\x0C", "\x7F", "\x01"];
         let ctrl = ctrl_chars[self.rand_index(ctrl_chars.len())];
 
-        if let Some(pos) = find_case_insensitive(payload, "transfer-encoding") {
-            let inject_at = pos + self.rand_index("Transfer-Encoding".len());
+        if let Some(header) = find_header_case_insensitive(payload, "transfer-encoding") {
+            let inject_at =
+                header.name_start + self.rand_index(header.name_end - header.name_start);
             let mut result = payload[..inject_at].to_string();
             result.push_str(ctrl);
             result.push_str(&payload[inject_at..]);
@@ -267,34 +254,26 @@ impl Mutator {
         let dup_te = self.rand_index(2) == 0;
 
         if dup_te {
-            if let Some(pos) = find_case_insensitive(payload, "transfer-encoding") {
-                let line_end = payload[pos..]
-                    .find("\r\n")
-                    .map(|p| pos + p + 2)
-                    .unwrap_or(payload.len());
-                let header_line = &payload[pos..line_end];
-                let mut result = payload[..line_end].to_string();
+            if let Some(header) = find_header_case_insensitive(payload, "transfer-encoding") {
+                let header_line = &payload[header.line_start..header.line_end];
+                let mut result = payload[..header.line_end].to_string();
                 result.push_str(header_line);
-                if !header_line.ends_with("\r\n") {
+                if !header_line.ends_with('\n') {
                     result.push_str("\r\n");
                 }
-                result.push_str(&payload[line_end..]);
+                result.push_str(&payload[header.line_end..]);
                 result
             } else {
                 payload.to_string()
             }
-        } else if let Some(pos) = find_case_insensitive(payload, "content-length") {
-            let line_end = payload[pos..]
-                .find("\r\n")
-                .map(|p| pos + p + 2)
-                .unwrap_or(payload.len());
-            let header_line = &payload[pos..line_end];
-            let mut result = payload[..line_end].to_string();
+        } else if let Some(header) = find_header_case_insensitive(payload, "content-length") {
+            let header_line = &payload[header.line_start..header.line_end];
+            let mut result = payload[..header.line_end].to_string();
             result.push_str(header_line);
-            if !header_line.ends_with("\r\n") {
+            if !header_line.ends_with('\n') {
                 result.push_str("\r\n");
             }
-            result.push_str(&payload[line_end..]);
+            result.push_str(&payload[header.line_end..]);
             result
         } else {
             payload.to_string()
@@ -316,21 +295,154 @@ impl Mutator {
     }
 }
 
-/// Case-insensitive search for a substring, returns byte offset of match.
-/// Uses ASCII case comparison to avoid heap allocation.
-fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    let needle_bytes = needle.as_bytes();
-    let needle_len = needle_bytes.len();
-    if needle_len == 0 || haystack.len() < needle_len {
+#[derive(Debug, Clone, Copy)]
+struct HeaderMatch {
+    line_start: usize,
+    line_end: usize,
+    name_start: usize,
+    name_end: usize,
+    colon: usize,
+    value_start: usize,
+    value_end: usize,
+}
+
+fn normalize_header_name(name: &str) -> String {
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = name.as_bytes();
+    let mut normalized = String::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                index += 3;
+                (high << 4) | low
+            } else {
+                index += 1;
+                continue;
+            }
+        } else {
+            let byte = bytes[index];
+            index += 1;
+            byte
+        };
+        if byte.is_ascii_alphabetic() {
+            normalized.push(byte.to_ascii_lowercase() as char);
+        }
+    }
+    normalized
+}
+
+/// Find a named header in the header block, never in the request target or body.
+/// Header names may have optional horizontal whitespace before the colon, which
+/// is useful for mutating the deliberately malformed framing corpus.
+fn find_header_case_insensitive(haystack: &str, needle: &str) -> Option<HeaderMatch> {
+    let header_end = match (haystack.find("\r\n\r\n"), haystack.find("\n\n")) {
+        (Some(crlf), Some(lf)) => crlf.min(lf),
+        (Some(crlf), None) => crlf,
+        (None, Some(lf)) => lf,
+        (None, None) => haystack.len(),
+    };
+    let normalized_needle = normalize_header_name(needle);
+    if normalized_needle.is_empty() {
         return None;
     }
     let haystack_bytes = haystack.as_bytes();
-    for i in 0..=(haystack_bytes.len() - needle_len) {
-        if haystack_bytes[i..i + needle_len].eq_ignore_ascii_case(needle_bytes) {
-            return Some(i);
+
+    let mut line_start = 0;
+    while line_start < header_end {
+        let raw_line_end = haystack_bytes[line_start..header_end]
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map(|offset| line_start + offset + 1)
+            .unwrap_or(header_end);
+        let (line_end, content_end) = if raw_line_end == header_end {
+            // The header terminator is outside `header_end`; include its first
+            // line ending in the match so inserting/duplicating the final
+            // header does not create an extra blank line.
+            if haystack_bytes[header_end..].starts_with(b"\r\n") {
+                (header_end + 2, header_end)
+            } else if haystack_bytes[header_end..].starts_with(b"\n") {
+                (header_end + 1, header_end)
+            } else {
+                (header_end, header_end)
+            }
+        } else {
+            (raw_line_end, raw_line_end)
+        };
+        let content_end = haystack_bytes[line_start..content_end]
+            .iter()
+            .rposition(|&byte| byte != b'\n' && byte != b'\r')
+            .map(|offset| line_start + offset + 1)
+            .unwrap_or(line_start);
+
+        let mut name_start = line_start;
+        while name_start < content_end && matches!(haystack_bytes[name_start], b' ' | b'\t') {
+            name_start += 1;
         }
+        let Some(colon_offset) = haystack_bytes[name_start..content_end]
+            .iter()
+            .position(|&byte| byte == b':')
+        else {
+            line_start = line_end;
+            continue;
+        };
+        let colon = name_start + colon_offset;
+        let mut name_end = colon;
+        while name_end > name_start && matches!(haystack_bytes[name_end - 1], b' ' | b'\t') {
+            name_end -= 1;
+        }
+        let normalized_name = normalize_header_name(&haystack[name_start..name_end]);
+        let is_single_junk_suffix = normalized_needle == "transferencoding"
+            && normalized_name.starts_with("transferencoding")
+            && normalized_name.len() == normalized_needle.len() + 1;
+        if normalized_name == normalized_needle || is_single_junk_suffix {
+            return Some(HeaderMatch {
+                line_start,
+                line_end,
+                name_start,
+                name_end,
+                colon,
+                value_start: colon + 1,
+                value_end: content_end,
+            });
+        }
+
+        line_start = line_end;
     }
     None
+}
+
+/// Replace a chunk-framing pattern only after the request header terminator.
+/// Searching the whole payload can mutate a custom header value that happens
+/// to contain the same bytes instead of the chunk body being targeted.
+fn replace_first_in_body(payload: &str, needle: &[u8], replacement: &str) -> String {
+    let Some(header_end) = payload.find("\r\n\r\n") else {
+        return payload.to_string();
+    };
+    let body_start = header_end + 4;
+    let Some(relative_start) = payload.as_bytes()[body_start..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+    else {
+        return payload.to_string();
+    };
+    let start = body_start + relative_start;
+    let end = start + needle.len();
+    let mut result = String::with_capacity(payload.len() + replacement.len() - needle.len());
+    result.push_str(&payload[..start]);
+    result.push_str(replacement);
+    result.push_str(&payload[end..]);
+    result
 }
 
 #[cfg(test)]
@@ -378,6 +490,10 @@ mod tests {
                 "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding : chunked\r\n\r\n0\r\n\r\n",
                 "Transfer-Encoding :",
             ),
+            (
+                "POST / HTTP/1.1\r\nHost: h\r\nTransfer_Encoding: chunked\r\n\r\n0\r\n\r\n",
+                "Transfer_Encoding:",
+            ),
         ] {
             let mutated = m.mutate_te_whitespace(seed);
             assert_ne!(
@@ -387,6 +503,45 @@ mod tests {
             // Exactly one whitespace byte was injected.
             assert_eq!(mutated.len(), seed.len() + 1);
         }
+    }
+
+    #[test]
+    fn mutation_targets_headers_instead_of_request_target() {
+        let seed = "POST /Transfer-Encoding:marker HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG";
+        let mut m = Mutator::new(MutatorConfig {
+            seed: 7,
+            mutations_per_payload: 1,
+        });
+        let mutated = m.mutate_te_whitespace(seed);
+        assert!(mutated.starts_with("POST /Transfer-Encoding:marker HTTP/1.1\r\n"));
+        assert!(mutated.contains("Transfer-Encoding:"));
+        assert_eq!(mutated.len(), seed.len() + 1);
+        assert!(!mutated.contains("Transfer-Encoding: chunked\r\n"));
+    }
+
+    #[test]
+    fn mutate_cl_value_accepts_space_before_colon() {
+        let seed = "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nContent-Length : 6\r\n\r\n0\r\n\r\nG";
+        let mut m = Mutator::new(MutatorConfig {
+            seed: 1,
+            mutations_per_payload: 1,
+        });
+        let mutated = m.mutate_cl_value(seed);
+        assert_ne!(mutated, seed);
+        assert!(mutated.contains("Content-Length : "));
+    }
+
+    #[test]
+    fn chunk_mutation_targets_the_body_not_a_header_value() {
+        let seed = "POST / HTTP/1.1\r\nHost: h\r\nX-Note: 1\r\nA\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n0\r\n\r\n";
+        let mut m = Mutator::new(MutatorConfig {
+            seed: 1,
+            mutations_per_payload: 1,
+        });
+        let mutated = m.mutate_chunk_size(seed);
+        assert_ne!(mutated, seed);
+        assert!(mutated.contains("X-Note: 1\r\nA\r\n"));
+        assert!(mutated[mutated.find("\r\n\r\n").unwrap() + 4..].contains("A\r\n"));
     }
 
     #[test]
