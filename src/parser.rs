@@ -18,7 +18,7 @@ use crate::model::{CheckResult, Confidence};
 use crate::payloads::{
     get_cl_edge_case_payloads, get_cl_te_payloads, get_te_cl_payloads, get_te_te_payloads,
 };
-use crate::scanner::build_control_request;
+use crate::scanner::{build_control_request, response_body_length};
 use crate::utils::parse_status_code;
 
 /// Keep the opt-in parser audit bounded even when the caller does not pass
@@ -187,13 +187,6 @@ async fn observe(
     }
 }
 
-fn response_body_length(response: &str) -> usize {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body.len())
-        .unwrap_or(0)
-}
-
 fn representative(samples: &[Observation]) -> Observation {
     let mut responders: Vec<Observation> = samples
         .iter()
@@ -248,9 +241,15 @@ fn discrepancy_signals(probe: &Observation, control: &Observation) -> Vec<String
 }
 
 fn is_timeout_backed_candidate(probe: &Observation, control: &Observation) -> bool {
+    // A 5xx control response is not a stable parser baseline: upstream
+    // overload or a route-specific server error can make a probe's 408/504
+    // look different without any framing discrepancy. Require a non-5xx
+    // non-timeout control response before promoting the timeout difference.
     (probe.timed_out || probe.gateway_timeout())
         && control.responded()
-        && !control.gateway_timeout()
+        && control
+            .status_code
+            .is_some_and(|code| code < 500 && !matches!(code, 408 | 504))
 }
 
 async fn confirm_timeout_difference(
@@ -448,6 +447,18 @@ mod tests {
         assert!(!is_timeout_backed_candidate(
             &observation(None, 0),
             &observation(None, 0)
+        ));
+        assert!(!is_timeout_backed_candidate(
+            &observation(None, 0),
+            &observation(Some(500), 12)
+        ));
+        assert!(!is_timeout_backed_candidate(
+            &observation(None, 0),
+            &observation(Some(408), 12)
+        ));
+        assert!(!is_timeout_backed_candidate(
+            &observation(None, 0),
+            &observation(Some(504), 12)
         ));
     }
 
