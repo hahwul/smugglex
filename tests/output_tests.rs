@@ -144,6 +144,21 @@ fn test_build_batch_results_summary_counts_failures_and_vulnerabilities() {
     assert_eq!(batch.summary.vulnerable_targets, 1);
     assert_eq!(batch.summary.total_checks, 2);
     assert_eq!(batch.summary.vulnerable_checks, 1);
+    assert!(batch.error.is_none());
+}
+
+#[test]
+fn test_batch_input_error_round_trips_without_changing_normal_output() {
+    let mut batch = build_batch_results(Vec::new(), Some("0.2.0"));
+    let normal_json = serde_json::to_string(&batch).unwrap();
+    assert!(!normal_json.contains("\"error\""));
+
+    batch.error = Some("no valid URLs provided".to_string());
+    let json = serde_json::to_string(&batch).unwrap();
+    assert!(json.contains("\"error\":\"no valid URLs provided\""));
+
+    let parsed: BatchScanResults = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.error.as_deref(), Some("no valid URLs provided"));
 }
 
 #[test]

@@ -136,4 +136,8 @@ pub struct BatchScanResults {
     pub results: Vec<ScanResults>,
     /// Aggregate statistics
     pub summary: BatchSummary,
+    /// Error for a batch-level input/usage failure where no target result can
+    /// carry the message (for example, an empty target list or invalid option).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }

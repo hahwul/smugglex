@@ -69,12 +69,15 @@ pub fn log_scan_results(
         match serde_json::to_string_pretty(&scan_results) {
             Ok(json_output) => println!("{}", json_output),
             Err(e) => {
-                log(
-                    LogLevel::Error,
-                    &format!("failed to serialize results to JSON: {}", e),
+                // Never fall back to human-readable stdout here: callers that
+                // requested JSON must always be able to parse stdout.
+                eprintln!("ERR failed to serialize results to JSON: {}", e);
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "error": "failed to serialize results to JSON"
+                    })
                 );
-                log(LogLevel::Info, "falling back to plain text output");
-                log_plain_results(results, vulnerable_count);
             }
         }
     } else {
@@ -205,6 +208,7 @@ pub fn build_batch_results(results: Vec<ScanResults>, version: Option<&str>) -> 
         timestamp: chrono::Utc::now().to_rfc3339(),
         results,
         summary,
+        error: None,
     }
 }
 
@@ -214,9 +218,12 @@ pub fn print_batch_json(batch: &BatchScanResults) {
     match serde_json::to_string_pretty(batch) {
         Ok(json) => println!("{}", json),
         Err(e) => {
-            log(
-                LogLevel::Error,
-                &format!("failed to serialize batch results: {}", e),
+            eprintln!("ERR failed to serialize batch results: {}", e);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "error": "failed to serialize batch results"
+                })
             );
         }
     }

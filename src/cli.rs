@@ -24,10 +24,17 @@ pub const KNOWN_CHECK_NAMES: [&str; 10] = [
     "h2-downgrade",
 ];
 
-/// Return the names in a comma-separated `--checks` value that match no known
-/// check (trimmed; empty segments ignored). An empty result means every
-/// requested name was recognized.
-pub fn unknown_check_names(requested: &str, known: &[&str]) -> Vec<String> {
+/// Every exploit mode smugglex understands. Used to reject a typo before a
+/// scan starts instead of silently skipping the requested post-scan action.
+pub const KNOWN_EXPLOIT_NAMES: [&str; 5] = [
+    "localhost-access",
+    "path-fuzz",
+    "smuggle",
+    "capture",
+    "reveal",
+];
+
+fn unknown_names(requested: &str, known: &[&str]) -> Vec<String> {
     requested
         .split(',')
         .map(|s| s.trim())
@@ -37,14 +44,74 @@ pub fn unknown_check_names(requested: &str, known: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// Whether `requested` selects at least one known check. False means a typo'd
-/// `--checks` that would otherwise scan nothing.
-pub fn has_any_known_check(requested: &str, known: &[&str]) -> bool {
+fn has_any_known_name(requested: &str, known: &[&str]) -> bool {
     requested
         .split(',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .any(|s| known.contains(&s))
+}
+
+/// Return the names in a comma-separated `--checks` value that match no known
+/// check (trimmed; empty segments ignored). An empty result means every
+/// requested name was recognized.
+pub fn unknown_check_names(requested: &str, known: &[&str]) -> Vec<String> {
+    unknown_names(requested, known)
+}
+
+/// Whether `requested` selects at least one known check. False means a typo'd
+/// `--checks` that would otherwise scan nothing.
+pub fn has_any_known_check(requested: &str, known: &[&str]) -> bool {
+    has_any_known_name(requested, known)
+}
+
+/// Return the names in a comma-separated `--exploit` value that match no known
+/// exploit (trimmed; empty segments ignored).
+pub fn unknown_exploit_names(requested: &str) -> Vec<String> {
+    unknown_names(requested, &KNOWN_EXPLOIT_NAMES)
+}
+
+/// Whether `requested` selects at least one known exploit.
+pub fn has_any_known_exploit(requested: &str) -> bool {
+    has_any_known_name(requested, &KNOWN_EXPLOIT_NAMES)
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
+}
+
+/// Validate user-supplied `-H/--header` values before interpolating them into
+/// raw HTTP requests. Header names must be HTTP tokens and values may not carry
+/// line breaks or other control characters that could inject another header or
+/// request.
+pub fn validate_custom_headers(headers: &[String]) -> std::result::Result<(), String> {
+    for (index, header) in headers.iter().enumerate() {
+        let Some((name, value)) = header.split_once(':') else {
+            return Err(format!(
+                "--header #{} must use the format 'Name: Value'",
+                index + 1
+            ));
+        };
+
+        if name.is_empty() || !name.bytes().all(is_http_token_byte) {
+            return Err(format!(
+                "--header #{} has an invalid header name",
+                index + 1
+            ));
+        }
+
+        if value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() && byte != b'\t')
+        {
+            return Err(format!(
+                "--header #{} value must not contain control characters",
+                index + 1
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Output format type
@@ -74,7 +141,14 @@ impl OutputFormat {
 
 /// A powerful HTTP Request Smuggling testing tool for detecting CL.TE, TE.CL, TE.TE, H2C, and H2 smuggling vulnerabilities
 #[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None, disable_version_flag = true, before_help = r#"
+#[command(
+    author,
+    version,
+    about,
+    long_about = None,
+    disable_help_flag = true,
+    disable_version_flag = true,
+    before_help = r#"
 
         ████
        ██   █
@@ -222,6 +296,10 @@ pub struct Cli {
     #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
     pub version: bool,
 
+    /// Print help information
+    #[arg(short = 'h', long = "help", action = clap::ArgAction::SetTrue)]
+    pub help: bool,
+
     /// Delay between requests in milliseconds (rate limiting)
     #[arg(
         help_heading = "REQUEST",
@@ -326,6 +404,37 @@ mod tests {
         assert!(!has_any_known_check("clte", &KNOWN_CHECK_NAMES));
         assert!(!has_any_known_check("CL-TE,cl_te", &KNOWN_CHECK_NAMES));
         assert!(!has_any_known_check("  , ,", &KNOWN_CHECK_NAMES));
+    }
+
+    #[test]
+    fn exploit_selection_rejects_unknown_names() {
+        assert_eq!(
+            unknown_exploit_names("reveal, typo",),
+            vec!["typo".to_string()]
+        );
+        assert!(unknown_exploit_names("smuggle, capture").is_empty());
+        assert!(has_any_known_exploit("typo,reveal"));
+        assert!(!has_any_known_exploit("typo"));
+    }
+
+    #[test]
+    fn custom_headers_reject_injection_and_malformed_names() {
+        assert!(
+            validate_custom_headers(&[
+                "X-Trace: value".to_string(),
+                "Authorization: Bearer token".to_string(),
+            ])
+            .is_ok()
+        );
+        assert!(validate_custom_headers(&["missing-colon".to_string()]).is_err());
+        assert!(validate_custom_headers(&["Bad Name: value".to_string()]).is_err());
+        assert!(validate_custom_headers(&["X-Trace: value\r\nInjected: yes".to_string()]).is_err());
+    }
+
+    #[test]
+    fn help_is_parsed_for_main_to_render_in_the_selected_format() {
+        let cli = Cli::try_parse_from(["smugglex", "--help"]).unwrap();
+        assert!(cli.help);
     }
 
     #[test]

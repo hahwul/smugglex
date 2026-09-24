@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{self, BufRead, IsTerminal};
@@ -204,24 +204,23 @@ fn decide_exploit_action(
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut cli = Cli::parse();
-    cli.apply_global_settings();
 
-    // Initialize TLS config (must happen before any network requests).
-    http::init_tls_config(
-        cli.insecure,
-        cli.cacert.as_deref().map(std::path::Path::new),
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("{} TLS init error: {}", "[!]".yellow().bold(), e);
-        std::process::exit(2);
-    });
-
-    // Activate machine mode for clean structured output (used by AI agents, scripts, CI).
-    // When active, stdout will contain *only* JSON; all chatter goes to stderr or is suppressed.
+    // Select machine mode before handling any early-exit path. Clap's built-in
+    // help path is intentionally disabled in Cli, so both help and version
+    // can honor the same JSON stdout contract as scans and input errors.
     if cli.effective_format().is_json() {
         set_machine(true);
-        // In pure machine mode we also want to suppress most progress noise.
-        // (progress bar creation below already respects verbose, we additionally hide it for json)
+    }
+    cli.apply_global_settings();
+
+    if cli.help {
+        let help = Cli::command().render_help().to_string();
+        if is_machine() {
+            println!("{}", serde_json::json!({ "help": help }));
+        } else {
+            print!("{help}");
+        }
+        return Ok(());
     }
 
     if cli.version {
@@ -277,15 +276,16 @@ async fn main() -> Result<()> {
     if let Some(ref checks_str) = cli.checks {
         let unknown =
             smugglex::cli::unknown_check_names(checks_str, &smugglex::cli::KNOWN_CHECK_NAMES);
-        if !unknown.is_empty() && !is_machine() {
-            log(
-                LogLevel::Warning,
+        if !unknown.is_empty() {
+            emit_input_error(
+                &cli,
                 &format!(
-                    "ignoring unrecognized check name(s): {} (known: {})",
+                    "unknown check name(s): {} (known: {})",
                     unknown.join(", "),
                     smugglex::cli::KNOWN_CHECK_NAMES.join(", "),
                 ),
             );
+            std::process::exit(2);
         }
         if !smugglex::cli::has_any_known_check(checks_str, &smugglex::cli::KNOWN_CHECK_NAMES) {
             emit_input_error(
@@ -299,6 +299,66 @@ async fn main() -> Result<()> {
             // Usage/input error → exit 2
             std::process::exit(2);
         }
+    }
+
+    if let Some(ref exploit_str) = cli.exploit {
+        let unknown = smugglex::cli::unknown_exploit_names(exploit_str);
+        if !unknown.is_empty() {
+            emit_input_error(
+                &cli,
+                &format!(
+                    "unknown exploit type(s): {} (known: {})",
+                    unknown.join(", "),
+                    smugglex::cli::KNOWN_EXPLOIT_NAMES.join(", "),
+                ),
+            );
+            std::process::exit(2);
+        }
+        if !smugglex::cli::has_any_known_exploit(exploit_str) {
+            emit_input_error(
+                &cli,
+                "no valid exploit types selected from --exploit; nothing would run",
+            );
+            std::process::exit(2);
+        }
+        if exploit_str
+            .split(',')
+            .any(|name| name.trim() == "localhost-access")
+        {
+            let (valid_ports, invalid_ports) = parse_exploit_ports(&cli.exploit_ports);
+            if !invalid_ports.is_empty() {
+                emit_input_error(
+                    &cli,
+                    &format!(
+                        "invalid --exploit-ports token(s): {} (must be decimal ports in the range 0-65535)",
+                        invalid_ports.join(", ")
+                    ),
+                );
+                std::process::exit(2);
+            }
+            if valid_ports.is_empty() {
+                emit_input_error(
+                    &cli,
+                    "--exploit-ports must contain at least one valid port for localhost-access",
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+
+    if let Err(error) = smugglex::cli::validate_custom_headers(&cli.headers) {
+        emit_input_error(&cli, &error);
+        std::process::exit(2);
+    }
+
+    // Initialize TLS config only after all CLI and input validation succeeds,
+    // while still keeping it before any network request.
+    if let Err(e) = http::init_tls_config(
+        cli.insecure,
+        cli.cacert.as_deref().map(std::path::Path::new),
+    ) {
+        emit_input_error(&cli, &format!("TLS init error: {e}"));
+        std::process::exit(2);
     }
 
     // Collect outcomes from all targets. This enables:
@@ -429,7 +489,8 @@ async fn main() -> Result<()> {
 /// or a human-readable message otherwise. Callers exit with code 2 afterward.
 fn emit_input_error(cli: &Cli, message: &str) {
     if cli.effective_format().is_json() {
-        let empty_batch = build_batch_results(Vec::new(), Some(env!("CARGO_PKG_VERSION")));
+        let mut empty_batch = build_batch_results(Vec::new(), Some(env!("CARGO_PKG_VERSION")));
+        empty_batch.error = Some(message.to_string());
         match serde_json::to_string_pretty(&empty_batch) {
             Ok(json) => println!("{}", json),
             Err(e) => {
@@ -446,7 +507,8 @@ fn emit_input_error(cli: &Cli, message: &str) {
                             "vulnerable_targets": 0,
                             "total_checks": 0,
                             "vulnerable_checks": 0
-                        }
+                        },
+                        "error": message
                     })
                 );
             }
@@ -527,15 +589,11 @@ fn resolve_urls(cli: &mut Cli) -> Result<Vec<String>> {
         Ok(cli.urls.clone())
     } else if !io::stdin().is_terminal() {
         collect_url_lines(io::stdin().lock().lines())
-    } else if is_machine() {
-        // No URLs and stdin is an interactive terminal. In machine/JSON mode we
-        // must NOT dump clap's help banner to stdout and let it exit 0 — that
-        // violates JSON-stdout purity and the exit-code contract. Return an empty
-        // list so the caller emits the structured input error and exits 2 (the
-        // same path the piped/empty-stdin branch takes).
-        Ok(Vec::new())
     } else {
-        Cli::parse_from(["smugglex", "--help"]);
+        // An interactive invocation without a target is still a usage error.
+        // Returning an empty list lets the caller emit the selected-format
+        // input error and use exit code 2 instead of terminating through the
+        // help path with exit code 0.
         Ok(Vec::new())
     }
 }

@@ -11,6 +11,7 @@
 
 use clap::Parser;
 use smugglex::cli::{Cli, OutputFormat};
+use std::process::Command;
 
 #[test]
 fn test_single_url_parsing() {
@@ -267,6 +268,86 @@ fn test_json_shorthand_takes_precedence_over_plain_format() {
     assert!(
         matches!(cli.effective_format(), OutputFormat::Json),
         "--json should take precedence in effective_format"
+    );
+}
+
+#[test]
+fn test_json_help_is_a_single_machine_document() {
+    let output = Command::new(env!("CARGO_BIN_EXE_smugglex"))
+        .args(["--json", "--help"])
+        .output()
+        .expect("failed to run smugglex");
+
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON help must be parseable");
+    assert!(
+        json["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("Usage: smugglex"))
+    );
+}
+
+#[test]
+fn test_json_startup_errors_include_a_machine_readable_reason() {
+    let output = Command::new(env!("CARGO_BIN_EXE_smugglex"))
+        .args([
+            "--json",
+            "--cacert",
+            "/definitely/missing-smugglex-ca.pem",
+            "http://example.com",
+        ])
+        .output()
+        .expect("failed to run smugglex");
+
+    assert_eq!(output.status.code(), Some(2));
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("startup error must be parseable JSON");
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("failed to read CA cert file"))
+    );
+}
+
+#[test]
+fn test_json_rejects_unknown_check_names_before_scanning() {
+    let output = Command::new(env!("CARGO_BIN_EXE_smugglex"))
+        .args(["--json", "--checks", "cl-te,typo", "http://example.com"])
+        .output()
+        .expect("failed to run smugglex");
+
+    assert_eq!(output.status.code(), Some(2));
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("input error must be parseable JSON");
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("unknown check name"))
+    );
+}
+
+#[test]
+fn test_json_rejects_invalid_exploit_ports_before_scanning() {
+    let output = Command::new(env!("CARGO_BIN_EXE_smugglex"))
+        .args([
+            "--json",
+            "--exploit",
+            "localhost-access",
+            "--exploit-ports",
+            "80,not-a-port",
+            "http://example.com",
+        ])
+        .output()
+        .expect("failed to run smugglex");
+
+    assert_eq!(output.status.code(), Some(2));
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("input error must be parseable JSON");
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("invalid --exploit-ports"))
     );
 }
 
