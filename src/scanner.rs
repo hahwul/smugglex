@@ -88,7 +88,8 @@ struct VulnerabilityInfo {
     status: String,
     status_code: Option<u16>,
     duration: Duration,
-    /// Size of the response body in bytes (post-headers).
+    /// Size of the semantic response body in bytes (post-headers and, for
+    /// chunked responses, excluding transfer framing).
     /// Used to detect structural divergence between attack and control responses.
     body_length: usize,
     /// Fingerprint of response headers that frequently shift on desync
@@ -149,26 +150,83 @@ impl ResponseHeaderFingerprint {
     }
 }
 
-/// Extract the response body length (everything after the headers terminator).
-/// Returns 0 if the response is malformed or has no body section.
-fn response_body_length(response: &str) -> usize {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body.len())
-        .unwrap_or(0)
+/// Extract the semantic response body length, excluding HTTP chunk framing.
+/// Returns the raw post-header length when the response is malformed or a
+/// chunked body cannot be decoded, preserving useful evidence for truncated
+/// responses without mistaking framing bytes for application content.
+pub(crate) fn response_body_length(response: &str) -> usize {
+    let Some((head, body)) = response.split_once("\r\n\r\n") else {
+        return 0;
+    };
+    let is_chunked = head.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("transfer-encoding")
+                && value
+                    .split(',')
+                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+        })
+    });
+    if is_chunked {
+        decode_chunked_body_length(body.as_bytes()).unwrap_or(body.len())
+    } else {
+        body.len()
+    }
+}
+
+fn decode_chunked_body_length(body: &[u8]) -> Option<usize> {
+    let mut offset = 0usize;
+    let mut total = 0usize;
+
+    loop {
+        let line_end = body[offset..]
+            .windows(2)
+            .position(|window| window == b"\r\n")?
+            .checked_add(offset)?;
+        let mut size = &body[offset..line_end];
+        while size
+            .first()
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            size = &size[1..];
+        }
+        size = size.split(|&byte| byte == b';').next().unwrap_or_default();
+        while size.last().is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
+            size = &size[..size.len() - 1];
+        }
+        let size = usize::from_str_radix(std::str::from_utf8(size).ok()?, 16).ok()?;
+        offset = line_end.checked_add(2)?;
+
+        if size == 0 {
+            if body[offset..].starts_with(b"\r\n") {
+                return Some(total);
+            }
+            body[offset..]
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")?;
+            return Some(total);
+        }
+
+        let chunk_end = offset.checked_add(size)?;
+        let framed_end = chunk_end.checked_add(2)?;
+        if framed_end > body.len() || &body[chunk_end..framed_end] != b"\r\n" {
+            return None;
+        }
+        total = total.checked_add(size)?;
+        offset = framed_end;
+    }
 }
 
 struct BaselineMeasurement {
     status: String,
-    /// HTTP status code from the last baseline probe (parsed once for reuse).
+    /// Representative HTTP status code from the successful baseline probes.
     status_code: Option<u16>,
     /// Median baseline duration.
     duration: Duration,
     /// Maximum baseline duration. Used to derive a noise-aware timing threshold
     /// so that natural per-request variance does not trigger false positives.
     max_duration: Duration,
-    /// Response body length from the last baseline probe. Used by follow-up
-    /// probes to detect post-attack body divergence.
+    /// Median semantic response body length for the representative status.
+    /// Used by follow-up probes to detect post-attack body divergence.
     body_length: usize,
     observed_status_codes: Vec<Option<u16>>,
 }
@@ -228,6 +286,66 @@ fn payload_authority(payload: &[u8]) -> Option<&str> {
                 .map(str::trim_ascii)
                 .filter(|value| !value.is_empty())
         })
+}
+
+/// Normalize a possibly-obfuscated header name for framing comparisons.
+///
+/// The payload corpus deliberately includes separators, control bytes, and
+/// percent-encoded characters inside framing names. Ignoring non-letters and
+/// decoding ASCII percent escapes lets the control request remove those
+/// framing variants without treating unrelated names such as
+/// `Content-Encoding` or `X-Content-Length-Policy` as framing headers.
+fn normalized_header_name(name: &str) -> String {
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = name.as_bytes();
+    let mut normalized = String::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                index += 3;
+                (high << 4) | low
+            } else {
+                index += 1;
+                continue;
+            }
+        } else {
+            let byte = bytes[index];
+            index += 1;
+            byte
+        };
+
+        if byte.is_ascii_alphabetic() {
+            normalized.push(byte.to_ascii_lowercase() as char);
+        }
+    }
+    normalized
+}
+
+fn is_transfer_encoding_header_name(name: &str) -> bool {
+    let normalized = normalized_header_name(name);
+    // `nsfer-Encoding` is part of the existing obfuscation corpus. A single
+    // junk character after the canonical name is also intentionally covered by
+    // the corpus (`Transfer-Encoding x`). Do not use a broad substring match:
+    // application headers such as `X-Transfer-Encoding` are not framing.
+    normalized == "transferencoding"
+        || normalized == "nsferencoding"
+        || (normalized.starts_with("transferencoding")
+            && normalized.len() == "transferencoding".len() + 1)
+}
+
+fn is_content_length_header_name(name: &str) -> bool {
+    normalized_header_name(name) == "contentlength"
 }
 
 /// Send `count` shape-matched baseline probes that mirror the attack method but
@@ -301,41 +419,88 @@ async fn measure_baseline(
 /// error returned, since there is then nothing to measure against. This mirrors
 /// the best-effort behavior of `method_matched_baseline_durations`.
 fn aggregate_baseline(results: Vec<Result<(String, Duration)>>) -> Result<BaselineMeasurement> {
-    let mut durations = Vec::with_capacity(results.len());
+    let mut samples: Vec<(String, Duration, Option<u16>, usize)> =
+        Vec::with_capacity(results.len());
     let mut observed_status_codes = Vec::with_capacity(results.len());
-    let mut last_status = String::new();
-    let mut last_body_length = 0usize;
     let mut last_error: Option<SmugglexError> = None;
 
     for result in results {
         match result {
             Ok((response, duration)) => {
                 let status_line = response.lines().next().unwrap_or("");
-                observed_status_codes.push(parse_status_code(status_line));
-                durations.push(duration);
-                last_status = status_line.to_string();
-                last_body_length = response_body_length(&response);
+                let status_code = parse_status_code(status_line);
+                let body_length = response_body_length(&response);
+                observed_status_codes.push(status_code);
+                samples.push((status_line.to_string(), duration, status_code, body_length));
             }
             Err(e) => last_error = Some(e),
         }
     }
 
-    if durations.is_empty() {
+    if samples.is_empty() {
         return Err(last_error.unwrap_or_else(|| {
             SmugglexError::Io("baseline measurement produced no samples".into())
         }));
     }
 
+    let mut durations: Vec<Duration> = samples
+        .iter()
+        .map(|(_, duration, _, _)| *duration)
+        .collect();
     let max_duration = durations.iter().copied().max().unwrap_or_default();
     let median = median_duration(&mut durations);
-    let status_code = parse_status_code(&last_status);
+
+    // A response arriving last is not a representative baseline: one
+    // transient gateway error or dynamic body can otherwise become the oracle
+    // for every follow-up comparison. Use the modal status code and median body
+    // length from the representative status instead.
+    //
+    // Prefer a known status code when it ties with malformed samples. A single
+    // unparseable response must not erase an otherwise usable baseline and
+    // disable all status-based follow-up comparisons.
+    let mut modal_known_status = None;
+    let mut modal_known_count = 0usize;
+    for status_code in observed_status_codes.iter().flatten() {
+        let count = observed_status_codes
+            .iter()
+            .filter(|candidate| **candidate == Some(*status_code))
+            .count();
+        if count > modal_known_count {
+            modal_known_status = Some(*status_code);
+            modal_known_count = count;
+        }
+    }
+    let malformed_count = observed_status_codes
+        .iter()
+        .filter(|status_code| status_code.is_none())
+        .count();
+    let status_code = if modal_known_count >= malformed_count {
+        modal_known_status
+    } else {
+        None
+    };
+    let status = samples
+        .iter()
+        .find(|(_, _, sample_status, _)| *sample_status == status_code)
+        .map(|(status, _, _, _)| status.clone())
+        .unwrap_or_default();
+    let mut body_lengths: Vec<usize> = samples
+        .iter()
+        .filter(|(_, _, sample_status, _)| *sample_status == status_code)
+        .map(|(_, _, _, length)| *length)
+        .collect();
+    if body_lengths.is_empty() {
+        body_lengths = samples.iter().map(|(_, _, _, length)| *length).collect();
+    }
+    body_lengths.sort_unstable();
+    let body_length = body_lengths[body_lengths.len() / 2];
 
     Ok(BaselineMeasurement {
-        status: last_status,
+        status,
         status_code,
         duration: median,
         max_duration,
-        body_length: last_body_length,
+        body_length,
         observed_status_codes,
     })
 }
@@ -433,20 +598,31 @@ struct ControlObservation {
 fn payload_eligible_for_control(payload: &[u8]) -> bool {
     let text = String::from_utf8_lossy(payload);
     let head_end = text.find("\r\n\r\n").unwrap_or(text.len());
-    let head_lower = text[..head_end].to_ascii_lowercase();
+    let head = &text[..head_end];
 
     // Skip Upgrade-based / HTTP/2-shaped payloads — stripping TE does not
     // disable the H2C/H2 smuggling vector, so a control would not be a
     // meaningful reference.
-    if head_lower.contains("upgrade:") || head_lower.contains("http/2") {
+    let request_line = head.lines().next().unwrap_or_default();
+    let is_http2_request = request_line
+        .split_whitespace()
+        .any(|token| token.eq_ignore_ascii_case("HTTP/2") || token.starts_with("HTTP/2."));
+    let has_upgrade_header = head.lines().skip(1).any(|line| {
+        line.split_once(':')
+            .is_some_and(|(name, _)| normalized_header_name(name) == "upgrade")
+    });
+    if is_http2_request || has_upgrade_header {
         return false;
     }
 
     // Apply control only to payloads that actually carry TE-related artifacts.
-    head_lower.contains("transfer-encoding")
-        || head_lower.contains("transfer_encoding")
-        || head_lower.contains("transfer encoding")
-        || head_lower.contains("nsfer-encoding")
+    // Inspect header names rather than searching the whole header block so a
+    // path or an unrelated `X-Transfer-Encoding` header cannot opt a payload
+    // into a misleading control comparison.
+    head.lines().skip(1).any(|line| {
+        line.split_once(':')
+            .is_some_and(|(name, _)| is_transfer_encoding_header_name(name))
+    })
 }
 
 /// Maximum bytes of synthetic body padding emitted by the control request.
@@ -466,7 +642,9 @@ const CONTROL_BODY_MAX_BYTES: usize = 4096;
 ///
 /// All other headers (Host, Cookie, custom headers, Connection, etc.) are
 /// preserved so the backend processes a request shaped as closely as possible
-/// to the attack minus the smuggling-specific bits.
+/// to the attack minus the smuggling-specific bits. A `Transfer-Encoding` token
+/// is also removed from `Connection`, because that hop-by-hop token can keep a
+/// parser discrepancy active after the framing header itself is stripped.
 pub(crate) fn build_control_request(payload: &[u8]) -> String {
     // The control request is always pure ASCII (it strips the smuggling-specific
     // headers and re-emits a benign body), so a lossy view of the attack payload
@@ -488,21 +666,62 @@ pub(crate) fn build_control_request(payload: &[u8]) -> String {
         .map(|idx| payload.len() - (idx + 4))
         .unwrap_or(0);
 
-    let mut kept: Vec<&str> = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
+    let mut skip_continuation = false;
     for (i, line) in head.lines().enumerate() {
         if i == 0 {
-            kept.push(line);
+            kept.push(line.to_string());
             continue;
         }
-        let header_name = line.split(':').next().unwrap_or("");
-        let name_lower = header_name.to_ascii_lowercase();
-        if name_lower.contains("encoding")
-            || name_lower.contains("content-length")
-            || name_lower.contains("content_length")
+        if skip_continuation
+            && line
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
         {
             continue;
         }
-        kept.push(line);
+        skip_continuation = false;
+
+        let Some((header_name, _)) = line.split_once(':') else {
+            kept.push(line.to_string());
+            continue;
+        };
+        if is_transfer_encoding_header_name(header_name)
+            || is_content_length_header_name(header_name)
+        {
+            // Drop folded continuation lines belonging to this framing header
+            // as well; retaining one would leave an invalid fragment in the
+            // supposedly benign control request.
+            skip_continuation = true;
+            continue;
+        }
+        if normalized_header_name(header_name) == "connection" {
+            let (_, value) = line.split_once(':').expect("header name was split above");
+            let tokens: Vec<&str> = value.split(',').collect();
+            let filtered: Vec<&str> = tokens
+                .iter()
+                .copied()
+                .filter(|token| !token.trim().eq_ignore_ascii_case("transfer-encoding"))
+                .collect();
+            if filtered.len() != tokens.len() {
+                if filtered.is_empty() {
+                    continue;
+                }
+                let colon = line.find(':').expect("header name was split above");
+                kept.push(format!(
+                    "{}: {}",
+                    &line[..colon],
+                    filtered
+                        .iter()
+                        .map(|token| token.trim())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                continue;
+            }
+        }
+        kept.push(line.to_string());
     }
 
     // Match the original body size (capped) with benign ASCII padding so the
@@ -511,7 +730,7 @@ pub(crate) fn build_control_request(payload: &[u8]) -> String {
     let body_len = original_body_len.min(CONTROL_BODY_MAX_BYTES);
     let mut result = String::with_capacity(payload.len());
     for line in kept {
-        result.push_str(line);
+        result.push_str(&line);
         result.push_str("\r\n");
     }
     result.push_str(&format!("Content-Length: {}\r\n\r\n", body_len));
@@ -560,8 +779,9 @@ async fn observe_control_once(
 
 /// Send `CONTROL_SAMPLES` control requests and aggregate them conservatively:
 /// duration is the MAX (worst case favors FP rejection of borderline detections),
-/// status_code/body_length is taken from the slowest sample, and connection
-/// timeout is set if ANY sample timed out.
+/// structural fields come from the fastest known non-5xx sample, and connection
+/// timeout is set if ANY sample timed out. A 408/504 from ANY control sample is
+/// retained as the status so matching timeout detections are rejected too.
 ///
 /// Multiple samples protect against single-control flukes (a transient fast
 /// response that would otherwise let a real FP slip through) at the cost of one
@@ -585,15 +805,45 @@ async fn observe_control(
         .max_by_key(|(_, s)| s.duration)
         .map(|(i, _)| i)
         .unwrap_or(0);
+    let structural_idx = control_structure_index(&samples);
     let any_timeout = samples.iter().any(|s| s.is_connection_timeout);
     let worst = &samples[worst_idx];
+    let structural = &samples[structural_idx];
+    let status_code = control_status_code(&samples, structural_idx);
     Some(ControlObservation {
         duration: worst.duration,
-        status_code: worst.status_code,
-        body_length: worst.body_length,
-        header_fingerprint: worst.header_fingerprint.clone(),
+        status_code,
+        body_length: structural.body_length,
+        header_fingerprint: structural.header_fingerprint.clone(),
         is_connection_timeout: any_timeout,
     })
+}
+
+fn control_structure_index(samples: &[ControlObservation]) -> usize {
+    samples
+        .iter()
+        .enumerate()
+        .filter(|(_, sample)| sample.status_code.is_some_and(|code| code < 500))
+        .min_by_key(|(_, sample)| sample.duration)
+        .or_else(|| {
+            samples
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, sample)| sample.duration)
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+fn control_status_code(samples: &[ControlObservation], structural_idx: usize) -> Option<u16> {
+    samples
+        .iter()
+        .find_map(|sample| sample.status_code.filter(|code| matches!(*code, 408 | 504)))
+        .or_else(|| {
+            samples
+                .get(structural_idx)
+                .and_then(|sample| sample.status_code)
+        })
 }
 
 /// Aggregated observation from `FOLLOWUP_PROBE_COUNT` post-attack follow-up
@@ -631,7 +881,10 @@ impl FollowupObservation {
         if self.second_request {
             self.diverging > 0
         } else {
-            self.diverging * 2 > self.total
+            // One successful response after the other probes failed is not
+            // corroboration. A strict majority is meaningful only when at
+            // least two observations survived the transport layer.
+            self.total >= 2 && self.diverging * 2 > self.total
         }
     }
 }
@@ -671,11 +924,16 @@ async fn observe_followup_divergence(
                 let status_line = response.lines().next().unwrap_or("");
                 let status_code = parse_status_code(status_line);
                 let body_len = response_body_length(&response);
-                // Use the structural status check (excludes flake-prone 5xx) so a
-                // transient gateway error does not count as desync divergence,
-                // matching `count_structural_followup_divergence`.
+                // Use structural status/body checks that exclude flake-prone 5xx
+                // and malformed responses so a transient gateway error cannot
+                // count as desync divergence.
                 let status_diverged = followup_status_diverged(status_code, baseline.status_code);
-                let body_diverged = bodies_diverge(body_len, baseline.body_length);
+                let body_diverged = followup_body_diverged(
+                    status_code,
+                    baseline.status_code,
+                    body_len,
+                    baseline.body_length,
+                );
                 if status_diverged || body_diverged {
                     diverging += 1;
                 }
@@ -722,6 +980,20 @@ fn followup_status_diverged(status_code: Option<u16>, baseline_status: Option<u1
     }
 }
 
+fn followup_body_diverged(
+    status_code: Option<u16>,
+    baseline_status: Option<u16>,
+    body_length: usize,
+    baseline_body_length: usize,
+) -> bool {
+    // A malformed response or a transient 5xx error page is not reliable body
+    // evidence. Require both sides to have a known, non-5xx status before a
+    // size difference can corroborate a persistent desynchronization.
+    status_code.is_some_and(|code| code < 500)
+        && baseline_status.is_some_and(|code| code < 500)
+        && bodies_diverge(body_length, baseline_body_length)
+}
+
 /// Send `FOLLOWUP_PROBE_COUNT` fresh-connection GET probes and count how many
 /// returned a response that *structurally* diverges from the baseline — a
 /// non-5xx status change (per `followup_status_diverged`) or a body-length
@@ -762,7 +1034,12 @@ async fn count_structural_followup_divergence(
             }
             let body_len = response_body_length(&response);
             if followup_status_diverged(status_code, baseline.status_code)
-                || bodies_diverge(body_len, baseline.body_length)
+                || followup_body_diverged(
+                    status_code,
+                    baseline.status_code,
+                    body_len,
+                    baseline.body_length,
+                )
             {
                 diverging += 1;
             }
@@ -1504,6 +1781,12 @@ mod tests {
     }
 
     #[test]
+    fn payload_eligibility_ignores_upgrade_text_in_request_target() {
+        let p = "POST /upgrade:marker/http/2 HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nG";
+        assert!(payload_eligible_for_control(p.as_bytes()));
+    }
+
+    #[test]
     fn build_control_strips_transfer_encoding() {
         // Original attack body "0\r\n\r\nG" is 6 bytes — control should match
         // that size with benign ASCII padding.
@@ -1553,6 +1836,23 @@ mod tests {
     }
 
     #[test]
+    fn build_control_preserves_application_encoding_headers() {
+        let p = "POST / HTTP/1.1\r\nHost: x\r\nContent-Encoding: gzip\r\nX-Content-Length-Policy: strict\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG";
+        let control = build_control_request(p.as_bytes());
+        assert!(control.contains("Content-Encoding: gzip\r\n"));
+        assert!(control.contains("X-Content-Length-Policy: strict\r\n"));
+        assert!(!control.contains("Transfer-Encoding:"));
+    }
+
+    #[test]
+    fn build_control_removes_transfer_encoding_connection_token() {
+        let p = "POST / HTTP/1.1\r\nHost: x\r\nConnection: keep-alive, Transfer-Encoding\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nG";
+        let control = build_control_request(p.as_bytes());
+        assert!(control.contains("Connection: keep-alive\r\n"));
+        assert!(!control.contains("Connection: keep-alive, Transfer-Encoding"));
+    }
+
+    #[test]
     fn control_fp_when_both_504() {
         let attack = VulnerabilityInfo {
             status: "HTTP/1.1 504".into(),
@@ -1590,6 +1890,50 @@ mod tests {
             is_connection_timeout: false,
         };
         assert!(control_indicates_false_positive(&attack, &control, None));
+    }
+
+    #[test]
+    fn control_structure_prefers_fast_known_non_5xx_sample() {
+        let samples = vec![
+            ControlObservation {
+                duration: Duration::from_millis(20),
+                status_code: Some(200),
+                body_length: 13,
+                header_fingerprint: ResponseHeaderFingerprint::default(),
+                is_connection_timeout: false,
+            },
+            ControlObservation {
+                duration: Duration::from_millis(100),
+                status_code: Some(503),
+                body_length: 1000,
+                header_fingerprint: ResponseHeaderFingerprint::default(),
+                is_connection_timeout: false,
+            },
+        ];
+        let index = control_structure_index(&samples);
+        assert_eq!(index, 0);
+    }
+
+    #[test]
+    fn control_structure_retains_any_gateway_timeout_status() {
+        let samples = vec![
+            ControlObservation {
+                duration: Duration::from_millis(20),
+                status_code: Some(200),
+                body_length: 13,
+                header_fingerprint: ResponseHeaderFingerprint::default(),
+                is_connection_timeout: false,
+            },
+            ControlObservation {
+                duration: Duration::from_millis(100),
+                status_code: Some(504),
+                body_length: 0,
+                header_fingerprint: ResponseHeaderFingerprint::default(),
+                is_connection_timeout: false,
+            },
+        ];
+        let status_code = control_status_code(&samples, control_structure_index(&samples));
+        assert_eq!(status_code, Some(504));
     }
 
     #[test]
@@ -1932,6 +2276,14 @@ mod tests {
     }
 
     #[test]
+    fn followup_body_divergence_requires_known_non_5xx_statuses() {
+        assert!(followup_body_diverged(Some(200), Some(200), 100, 32));
+        assert!(!followup_body_diverged(Some(503), Some(200), 1000, 32));
+        assert!(!followup_body_diverged(None, Some(200), 1000, 32));
+        assert!(!followup_body_diverged(Some(200), None, 1000, 32));
+    }
+
+    #[test]
     fn second_request_signal_emitted() {
         let info = VulnerabilityInfo {
             status: "HTTP/1.1 200 OK".into(),
@@ -2055,6 +2407,16 @@ mod tests {
     }
 
     #[test]
+    fn one_surviving_followup_is_not_corroboration() {
+        let one_response = FollowupObservation {
+            diverging: 1,
+            total: 1,
+            second_request: false,
+        };
+        assert!(!one_response.has_corroborated_divergence());
+    }
+
+    #[test]
     fn aggregate_baseline_tolerates_partial_probe_failure() {
         // A single failed probe among successes must not discard the baseline.
         let results: Vec<Result<(String, Duration)>> = vec![
@@ -2087,5 +2449,52 @@ mod tests {
             aggregate_baseline(results).is_err(),
             "no surviving samples → error"
         );
+    }
+
+    #[test]
+    fn aggregate_baseline_ignores_a_last_sample_outlier() {
+        let results: Vec<Result<(String, Duration)>> = vec![
+            Ok((
+                "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nhey".to_string(),
+                Duration::from_millis(100),
+            )),
+            Ok((
+                "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nhey".to_string(),
+                Duration::from_millis(120),
+            )),
+            Ok((
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 64\r\n\r\nerror body"
+                    .to_string(),
+                Duration::from_millis(130),
+            )),
+        ];
+        let baseline = aggregate_baseline(results).expect("successful samples yield a baseline");
+        assert_eq!(baseline.status_code, Some(200));
+        assert_eq!(baseline.body_length, 3);
+        assert_eq!(baseline.status, "HTTP/1.1 200 OK");
+    }
+
+    #[test]
+    fn aggregate_baseline_prefers_known_status_on_a_tie() {
+        let results: Vec<Result<(String, Duration)>> = vec![
+            Ok(("malformed response".to_string(), Duration::from_millis(10))),
+            Ok((
+                "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nhey".to_string(),
+                Duration::from_millis(20),
+            )),
+        ];
+        let baseline = aggregate_baseline(results).expect("successful samples yield a baseline");
+        assert_eq!(baseline.status_code, Some(200));
+        assert_eq!(baseline.status, "HTTP/1.1 200 OK");
+        assert_eq!(baseline.body_length, 3);
+    }
+
+    #[test]
+    fn response_body_length_excludes_chunk_framing() {
+        let chunked =
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+        let with_trailer = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nX-Trace: 1\r\n\r\n";
+        assert_eq!(response_body_length(chunked), 5);
+        assert_eq!(response_body_length(with_trailer), 5);
     }
 }
