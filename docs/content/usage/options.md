@@ -29,7 +29,7 @@ description = "All CLI options for smugglex"
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-c, --checks` | all | Checks to run (comma-separated) |
+| `-c, --checks` | default set | Checks to run (comma-separated) |
 | `-1, --exit-first` | | Stop after first vulnerability |
 | `--fingerprint` | | Enable proxy fingerprinting |
 | `--fuzz` | | Enable mutation-based fuzzing |
@@ -38,6 +38,8 @@ description = "All CLI options for smugglex"
 | `--baseline-count` | 3 | Number of baseline requests for timing measurement |
 
 Available checks: `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`, `cl-0`, `0-cl`, `parser-discrepancy`, `h2-downgrade`
+
+With no `--checks`, smugglex runs the default set — `cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge` (plus `h2-downgrade` on `https` targets). The stateful/differential checks (`cl-0`, `0-cl`, `parser-discrepancy`) are opt-in and run only when named explicitly.
 
 `cl-0` is an opt-in same-connection response-queue probe. It requires a control sequence and repeated response shift before reporting a finding.
 

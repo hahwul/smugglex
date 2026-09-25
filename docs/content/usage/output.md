@@ -46,7 +46,7 @@ Key properties for automation:
 
 ```json
 {
-  "smugglex_version": "0.3.0",
+  "smugglex_version": "0.4.0",
   "timestamp": "...",
   "results": [
     { "target": "...", "checks": [...] },

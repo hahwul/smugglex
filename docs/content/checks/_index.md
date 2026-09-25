@@ -24,6 +24,8 @@ smugglex supports 10 types of HTTP Request Smuggling checks. Each exploits diffe
 smugglex -c cl-te,te-cl https://target.com
 ```
 
+With no `-c/--checks`, smugglex runs the default set (`cl-te`, `te-cl`, `te-te`, `h2c`, `h2`, `cl-edge`, plus `h2-downgrade` on `https` targets). The opt-in `cl-0`, `0-cl`, and `parser-discrepancy` checks run only when named explicitly.
+
 ## Detection Method
 
 smugglex uses **timing-based detection**. It measures baseline response times, then sends smuggling payloads and compares. A response is flagged only when it is *both* well past the baseline — at least 3× the median (or the slowest baseline + 500 ms, whichever is larger) — *and* over 1 second, which indicates desynchronization.

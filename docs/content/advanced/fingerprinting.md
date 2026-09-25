@@ -24,7 +24,7 @@ Analyzes response headers (`Server`, `Via`, `X-Powered-By`, etc.) and behavior p
 ```json
 {
   "fingerprint": {
-    "detected_proxy": "cloudflare",
+    "detected_proxy": "Cloudflare",
     "server_header": "cloudflare",
     "via_header": null,
     "powered_by": null
