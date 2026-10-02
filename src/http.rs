@@ -584,14 +584,6 @@ const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 /// makes response-queue capture work: when a smuggled request's response arrives
 /// glued to the previous one, the surplus is preserved for the next read instead
 /// of being discarded. Returns `None` at EOF with nothing buffered.
-#[cfg(test)]
-async fn read_one_framed<S: AsyncRead + Unpin + ?Sized>(
-    stream: &mut S,
-    carry: &mut Vec<u8>,
-) -> Result<Option<Vec<u8>>> {
-    read_one_framed_for(stream, carry, false).await
-}
-
 async fn read_one_framed_for<S: AsyncRead + Unpin + ?Sized>(
     stream: &mut S,
     carry: &mut Vec<u8>,
@@ -661,69 +653,10 @@ async fn read_one_framed_for<S: AsyncRead + Unpin + ?Sized>(
     }
 }
 
-/// Read exactly one complete HTTP/1.x response from `stream`, stopping as soon
-/// as the message is complete per its framing (Content-Length / chunked) rather
-/// than waiting for EOF. This lets the connection be reused for the next request
-/// (pipelining) and avoids blocking on keep-alive idle time. `?Sized` so trait
-/// objects (the boxed TLS/TCP stream) can be passed by `&mut`.
-#[cfg(test)]
-async fn read_one_http_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -> Result<Vec<u8>> {
-    let mut buf: Vec<u8> = Vec::with_capacity(8192);
-    let mut tmp = [0u8; 8192];
-    let mut header_end: Option<usize> = None;
-    let mut framing = BodyFraming::ReadToClose;
-    loop {
-        if let Some(he) = header_end {
-            match framing {
-                BodyFraming::ContentLength(len) => {
-                    // Checked addition so a hostile/garbled response advertising a
-                    // near-`usize::MAX` Content-Length cannot overflow `he + len`
-                    // (a debug-build panic, or a release-build wrap that would make
-                    // the comparison true and return a truncated response). An
-                    // unsatisfiable total simply means "keep reading until EOF",
-                    // which is the safe behavior. Mirrors `response_complete_len`.
-                    if he.checked_add(len).is_some_and(|total| buf.len() >= total) {
-                        break;
-                    }
-                }
-                BodyFraming::Chunked => {
-                    if chunked_body_complete(&buf[he..]) {
-                        break;
-                    }
-                }
-                BodyFraming::ReadToClose => {}
-            }
-        }
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            break; // peer closed the connection
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if header_end.is_none()
-            && let Some(pos) = find_subsequence(&buf, b"\r\n\r\n")
-        {
-            header_end = Some(pos + 4);
-            framing = detect_framing(&buf[..pos]);
-        }
-        // Bound memory: stop once the buffer hits the ceiling instead of
-        // accumulating without limit (e.g. a `Connection: close` stream, or a
-        // response advertising a huge/absent length) until the outer timeout.
-        if buf.len() >= MAX_RESPONSE_BYTES {
-            break;
-        }
-    }
-    Ok(buf)
-}
-
 /// Read one final response, discarding any informational responses that
 /// precede it (for example `100 Continue`). This is used by the ordinary
 /// request path when a caller supplied an Expect header; the dedicated
 /// two-phase probe keeps those interim responses instead.
-#[cfg(test)]
-async fn read_one_final_response<S: AsyncRead + Unpin + ?Sized>(stream: &mut S) -> Result<Vec<u8>> {
-    read_one_final_response_for(stream, false).await
-}
-
 async fn read_one_final_response_for<S: AsyncRead + Unpin + ?Sized>(
     stream: &mut S,
     head_request: bool,
@@ -1586,25 +1519,28 @@ kJ8CRz+khnaPy0Io4PLR\n\
     }
 
     #[tokio::test]
-    async fn read_one_http_response_oversized_content_length_does_not_panic() {
-        // Regression for the unchecked `he + len` overflow: under debug
-        // overflow-checks this previously panicked; it must instead read to EOF
-        // and return what arrived.
+    async fn read_one_framed_rejects_oversized_content_length_without_panic() {
         let raw = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\nAB",
             usize::MAX
         );
         let data = raw.into_bytes();
         let mut slice: &[u8] = &data;
-        let out = read_one_http_response(&mut slice).await.unwrap();
-        assert!(out.starts_with(b"HTTP/1.1 200 OK"));
+        let mut carry = Vec::new();
+        assert!(
+            read_one_framed_for(&mut slice, &mut carry, false)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn read_one_final_response_skips_informational_response() {
         let data = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
         let mut slice: &[u8] = data;
-        let out = read_one_final_response(&mut slice).await.unwrap();
+        let out = read_one_final_response_for(&mut slice, false)
+            .await
+            .unwrap();
         assert_eq!(out, &data[b"HTTP/1.1 100 Continue\r\n\r\n".len()..]);
     }
 
@@ -1617,24 +1553,12 @@ kJ8CRz+khnaPy0Io4PLR\n\
             let mut slice: &[u8] = data;
             let mut carry = Vec::new();
             assert!(
-                read_one_framed(&mut slice, &mut carry).await.is_err(),
+                read_one_framed_for(&mut slice, &mut carry, false)
+                    .await
+                    .is_err(),
                 "EOF before a declared response body is not a complete response"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn read_one_http_response_caps_unbounded_body() {
-        // A `Connection: close`-style response with no length signal frames as
-        // `ReadToClose`, so the read accumulates until EOF. Feed a body larger
-        // than the ceiling and confirm the read stops near the cap instead of
-        // consuming everything.
-        let mut data = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
-        data.extend(std::iter::repeat_n(b'A', MAX_RESPONSE_BYTES + 4096));
-        let mut slice: &[u8] = &data;
-        let out = read_one_http_response(&mut slice).await.unwrap();
-        assert!(out.len() >= MAX_RESPONSE_BYTES);
-        assert!(out.len() < data.len(), "buffer should be capped, not full");
     }
 
     #[tokio::test]
@@ -1646,7 +1570,7 @@ kJ8CRz+khnaPy0Io4PLR\n\
         data.extend(std::iter::repeat_n(b'A', MAX_RESPONSE_BYTES + 4096));
         let mut slice: &[u8] = &data;
         let mut carry = Vec::new();
-        let result = read_one_framed(&mut slice, &mut carry).await;
+        let result = read_one_framed_for(&mut slice, &mut carry, false).await;
         assert!(
             result.is_err(),
             "a truncated response must not be reported as complete"
@@ -1666,14 +1590,20 @@ kJ8CRz+khnaPy0Io4PLR\n\
         let mut slice: &[u8] = &data;
         let mut carry: Vec<u8> = Vec::new();
 
-        let first = read_one_framed(&mut slice, &mut carry).await.unwrap();
+        let first = read_one_framed_for(&mut slice, &mut carry, false)
+            .await
+            .unwrap();
         assert_eq!(first.as_deref(), Some(&a[..]));
         assert_eq!(carry, b.to_vec(), "surplus bytes for B must be carried");
 
-        let second = read_one_framed(&mut slice, &mut carry).await.unwrap();
+        let second = read_one_framed_for(&mut slice, &mut carry, false)
+            .await
+            .unwrap();
         assert_eq!(second.as_deref(), Some(&b[..]));
 
-        let third = read_one_framed(&mut slice, &mut carry).await.unwrap();
+        let third = read_one_framed_for(&mut slice, &mut carry, false)
+            .await
+            .unwrap();
         assert_eq!(third, None, "EOF with empty carry yields None");
     }
 }
