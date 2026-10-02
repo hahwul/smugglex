@@ -249,20 +249,21 @@ pub async fn fingerprint_target_with_authority(
 pub fn suggest_checks(fingerprint: &FingerprintResult) -> Vec<&'static str> {
     match &fingerprint.detected_proxy {
         ProxyType::Nginx => vec!["cl-te", "te-te", "te-cl", "h2c", "h2", "cl-edge"],
-        ProxyType::Apache => vec!["te-cl", "cl-te", "te-te", "h2c", "h2", "cl-edge"],
-        ProxyType::Varnish => vec!["cl-te", "te-cl", "te-te", "h2c", "h2", "cl-edge"],
-        ProxyType::CloudFront => vec!["cl-te", "te-te", "te-cl", "h2", "h2c", "cl-edge"],
+        ProxyType::Apache
+        | ProxyType::HAProxy
+        | ProxyType::Squid
+        | ProxyType::IIS
+        | ProxyType::Traefik => vec!["te-cl", "cl-te", "te-te", "h2c", "h2", "cl-edge"],
+        ProxyType::CloudFront | ProxyType::Akamai | ProxyType::Fastly => {
+            vec!["cl-te", "te-te", "te-cl", "h2", "h2c", "cl-edge"]
+        }
         ProxyType::Cloudflare => vec!["te-te", "cl-te", "te-cl", "h2", "h2c", "cl-edge"],
-        ProxyType::HAProxy => vec!["te-cl", "cl-te", "te-te", "h2c", "h2", "cl-edge"],
-        ProxyType::Envoy => vec!["cl-te", "te-cl", "te-te", "h2", "h2c", "cl-edge"],
-        ProxyType::ATS => vec!["cl-te", "te-cl", "te-te", "h2c", "h2", "cl-edge"],
-        ProxyType::Squid => vec!["te-cl", "cl-te", "te-te", "h2c", "h2", "cl-edge"],
-        ProxyType::Caddy => vec!["cl-te", "te-cl", "te-te", "h2", "h2c", "cl-edge"],
-        ProxyType::IIS => vec!["te-cl", "cl-te", "te-te", "h2c", "h2", "cl-edge"],
-        ProxyType::Traefik => vec!["cl-te", "te-cl", "te-te", "h2", "h2c", "cl-edge"],
-        ProxyType::Akamai => vec!["cl-te", "te-te", "te-cl", "h2", "h2c", "cl-edge"],
-        ProxyType::Fastly => vec!["cl-te", "te-te", "te-cl", "h2", "h2c", "cl-edge"],
-        ProxyType::Unknown(_) => vec!["cl-te", "te-cl", "te-te", "h2c", "h2", "cl-edge"],
+        ProxyType::Envoy | ProxyType::Caddy => {
+            vec!["cl-te", "te-cl", "te-te", "h2", "h2c", "cl-edge"]
+        }
+        ProxyType::Varnish | ProxyType::ATS | ProxyType::Unknown(_) => {
+            vec!["cl-te", "te-cl", "te-te", "h2c", "h2", "cl-edge"]
+        }
     }
 }
 
@@ -378,6 +379,21 @@ mod tests {
         };
         let checks = suggest_checks(&fp);
         assert_eq!(checks[0], "te-cl");
+    }
+
+    #[test]
+    fn test_suggest_checks_varnish_prioritizes_cl_te() {
+        let fp = FingerprintResult {
+            detected_proxy: ProxyType::Varnish,
+            server_header: None,
+            via_header: None,
+            powered_by: None,
+            raw_headers: HashMap::new(),
+        };
+        assert_eq!(
+            suggest_checks(&fp),
+            vec!["cl-te", "te-cl", "te-te", "h2c", "h2", "cl-edge"]
+        );
     }
 
     #[test]

@@ -2,61 +2,7 @@
 # (Cargo.toml, Cargo.lock, flake.nix, snap/snapcraft.yaml, aur/PKGBUILD).
 # Exits non-zero when they disagree so it can gate a release.
 
-CARGO_TOML   = "Cargo.toml"
-CARGO_LOCK   = "Cargo.lock"
-FLAKE_NIX    = "flake.nix"
-SNAP_YAML    = "snap/snapcraft.yaml"
-AUR_PKGBUILD = "aur/PKGBUILD"
-
-# Cargo.toml: top-level `version = "X"` inside [package].
-def cargo_toml_version : String?
-  content = File.read(CARGO_TOML)
-  pkg = content.match(/^\[package\][\s\S]*?(?=^\[|\z)/m)
-  return nil unless pkg
-  match = pkg[0].match(/^version\s*=\s*"([^"]+)"/m)
-  match ? match[1] : nil
-rescue
-  nil
-end
-
-# Cargo.lock: the `name = "smugglex"` entry's version line.
-def cargo_lock_version : String?
-  content = File.read(CARGO_LOCK)
-  match = content.match(/name\s*=\s*"smugglex"\s*\nversion\s*=\s*"([^"]+)"/)
-  match ? match[1] : nil
-rescue
-  nil
-end
-
-# flake.nix: any `version = "X";` (the file only has one such line for
-# the smugglex derivation).
-def flake_version : String?
-  content = File.read(FLAKE_NIX)
-  match = content.match(/version\s*=\s*"([^"]+)"\s*;/)
-  match ? match[1] : nil
-rescue
-  nil
-end
-
-# snap/snapcraft.yaml: `version: X` (optional leading `v` tolerated on read).
-def snap_version : String?
-  content = File.read(SNAP_YAML)
-  match = content.match(/^version:\s*['"]?v?([^'"\s]+)['"]?\s*$/m)
-  match ? match[1] : nil
-rescue
-  nil
-end
-
-# aur/PKGBUILD: `pkgver=X`. AUR forbids hyphens in pkgver, so pre-release
-# versions are stored with `_` (e.g. 0.3.0_dev.1); normalize back to `-`
-# so it compares equal to the other files.
-def aur_version : String?
-  content = File.read(AUR_PKGBUILD)
-  match = content.match(/^pkgver=([^\s]+)/m)
-  match ? match[1].gsub('_', '-') : nil
-rescue
-  nil
-end
+require "./version_helpers"
 
 cargo_v = cargo_toml_version
 lock_v  = cargo_lock_version
