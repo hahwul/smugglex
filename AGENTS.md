@@ -123,7 +123,8 @@ Key dependencies and their purposes:
 - **url** (2.5.8) - URL parsing and validation
 - **serde/serde_json** (1.0) - Serialization for JSON output
 - **tokio-rustls** (0.26) - TLS support for HTTPS
-- **rustls** (0.23), **rustls-pki-types** (1), **webpki-roots** (1.0) - TLS configuration and trust roots
+- **rustls** (0.23) - TLS configuration and re-exported PKI types
+- **webpki-roots** (1.0) - Web PKI trust roots
 - **chrono** (0.4) - Timestamp handling
 - **futures** (0.3) - Concurrent baseline request coordination
 
