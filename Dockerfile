@@ -29,7 +29,7 @@ RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
 
 # Install runtime dependencies
-RUN apk add --no-cache openssl libgcc
+RUN apk add --no-cache libgcc
 
 COPY --from=builder /usr/src/project/target/release/smugglex .
 
