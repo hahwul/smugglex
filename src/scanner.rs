@@ -1000,17 +1000,22 @@ fn followup_body_diverged(
 /// divergence (per `bodies_diverge`). Stricter than `observe_followup_divergence`
 /// because it backs the unconditional second-request probe, where there is no
 /// prior anomaly to corroborate the finding.
+/// Returns `(diverging, completed)`: how many of the `FOLLOWUP_PROBE_COUNT`
+/// probes structurally diverged from baseline, and how many actually got a
+/// response (the real denominator — a probe that errored/timed out never
+/// completed, so it must not be counted as part of the total either).
 async fn count_structural_followup_divergence(
     params: &PayloadCheckParams<'_>,
     path: &str,
     baseline: &BaselineMeasurement,
-) -> usize {
+) -> (usize, usize) {
     let authority = payload_authority(params.attack_request).unwrap_or(params.host);
     let probe = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         path, authority
     );
     let mut diverging = 0usize;
+    let mut completed = 0usize;
     for _ in 0..FOLLOWUP_PROBE_COUNT {
         if let Ok((response, _)) = send_request(
             params.host,
@@ -1022,6 +1027,7 @@ async fn count_structural_followup_divergence(
         )
         .await
         {
+            completed += 1;
             let status_line = response.lines().next().unwrap_or("");
             let status_code = parse_status_code(status_line);
             // Skip 5xx responses entirely — gateway/server errors are
@@ -1045,7 +1051,7 @@ async fn count_structural_followup_divergence(
             }
         }
     }
-    diverging
+    (diverging, completed)
 }
 
 /// Unconditional second-request desync probe, run only when the main payload
@@ -1066,6 +1072,7 @@ async fn probe_second_request_desync(
 ) -> Option<FollowupObservation> {
     const PLANT_PROBE_SEQUENCES: usize = 2;
     let mut diverging_min = usize::MAX;
+    let mut completed_min = usize::MAX;
     for _ in 0..PLANT_PROBE_SEQUENCES {
         // Plant: send the smuggling payload to corrupt the shared upstream
         // connection. Its own response is irrelevant here — the main loop has
@@ -1079,16 +1086,17 @@ async fn probe_second_request_desync(
             params.use_tls,
         )
         .await;
-        let d = count_structural_followup_divergence(params, path, baseline).await;
+        let (d, completed) = count_structural_followup_divergence(params, path, baseline).await;
         if d == 0 {
             // Not reproduced → transient backend behavior, not a desync.
             return None;
         }
         diverging_min = diverging_min.min(d);
+        completed_min = completed_min.min(completed);
     }
     Some(FollowupObservation {
         diverging: diverging_min,
-        total: FOLLOWUP_PROBE_COUNT,
+        total: completed_min,
         second_request: true,
     })
 }
@@ -1186,13 +1194,6 @@ async fn confirm_vulnerability(
     params: &PayloadCheckParams<'_>,
     initial: &VulnerabilityInfo,
 ) -> ConfirmationResult {
-    let mut durations = Vec::with_capacity(CONFIRMATION_RETRIES);
-    for _ in 0..CONFIRMATION_RETRIES {
-        if let Ok(Some(info)) = check_single_payload(params).await {
-            durations.push(info.duration);
-        }
-    }
-
     // "Status-only" means detection fired on the 408/504 status WITHOUT a timing
     // anomaly. A timing anomaly requires BOTH duration > timing_threshold AND
     // duration > MIN_DELAY_MS (see `is_delayed` in check_single_payload), so "no
@@ -1200,15 +1201,41 @@ async fn confirm_vulnerability(
     // `duration <= timing_threshold`. The old check missed the gray zone where
     // timing_threshold < duration <= MIN_DELAY_MS, wrongly applying lenient
     // strict-majority confirmation to what is really a status-only signal.
-    let attack_millis = initial.duration.as_millis();
-    let initial_has_timing_anomaly =
-        attack_millis > params.timing_threshold && attack_millis > MIN_DELAY_MS;
-    let initial_is_status_only = !initial.is_connection_timeout
-        && matches!(initial.status_code, Some(408) | Some(504))
-        && !initial_has_timing_anomaly;
+    let is_status_only = |info: &VulnerabilityInfo| {
+        let millis = info.duration.as_millis();
+        let has_timing_anomaly = millis > params.timing_threshold && millis > MIN_DELAY_MS;
+        !info.is_connection_timeout
+            && matches!(info.status_code, Some(408) | Some(504))
+            && !has_timing_anomaly
+    };
+    let initial_is_status_only = is_status_only(initial);
+
+    let mut durations = Vec::with_capacity(CONFIRMATION_RETRIES);
+    // For the strict categories (connection-timeout / status-only), a retry
+    // only counts toward "reproduced" when it fires via the SAME signal as the
+    // initial detection — not merely *some* signal. Without this, a one-off
+    // 408/504 that never recurs can still be "confirmed" by ordinary network
+    // jitter pushing unrelated retries past the timing threshold, silently
+    // promoting a noisy backend to a confirmed, high-confidence finding.
+    let mut matching_retries = 0usize;
+    for _ in 0..CONFIRMATION_RETRIES {
+        if let Ok(Some(info)) = check_single_payload(params).await {
+            let matches_initial_category = if initial.is_connection_timeout {
+                info.is_connection_timeout
+            } else if initial_is_status_only {
+                is_status_only(&info)
+            } else {
+                true
+            };
+            if matches_initial_category {
+                matching_retries += 1;
+            }
+            durations.push(info.duration);
+        }
+    }
 
     let confirmed = if initial.is_connection_timeout || initial_is_status_only {
-        durations.len() == CONFIRMATION_RETRIES
+        matching_retries == CONFIRMATION_RETRIES
     } else {
         durations.len() * 2 > CONFIRMATION_RETRIES
     };

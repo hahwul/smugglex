@@ -1031,6 +1031,100 @@ async fn test_flaky_504_not_confirmed() {
     assert_eq!(check_result.confidence, None);
 }
 
+/// Test: a one-off status-only 504 must not be "confirmed" by retries that
+/// never reproduce 504 but happen to run slow enough to trip the UNRELATED
+/// timing-anomaly signal instead. Confirmation for a status-only detection
+/// requires the retries to reproduce the SAME signal (408/504), not merely
+/// *some* signal — otherwise ordinary jitter pushing retries past
+/// MIN_DELAY_MS would wrongly promote a flaky gateway-timeout to a confirmed,
+/// high-confidence finding.
+#[tokio::test]
+async fn test_status_only_detection_not_confirmed_by_unrelated_timing_signal() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host = addr.ip().to_string();
+    let port = addr.port();
+
+    let handle = tokio::spawn(async move {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let count = request_count.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                    // Baseline (1-3): fast 200 OK.
+                    // First attack (4): fast 504 -> status-only detection (no
+                    // timing anomaly, since the response is immediate).
+                    // Confirmation retries (5-7): never reproduce 504, but are
+                    // slow enough (> MIN_DELAY_MS) to fire the timing-anomaly
+                    // signal instead.
+                    if n <= DEFAULT_BASELINE_COUNT {
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!",
+                            )
+                            .await;
+                    } else if n == DEFAULT_BASELINE_COUNT + 1 {
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n")
+                            .await;
+                    } else {
+                        tokio::time::sleep(Duration::from_millis(MIN_DELAY_MS as u64 + 200)).await;
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!",
+                            )
+                            .await;
+                    }
+                });
+            }
+        }
+    });
+
+    let pb = ProgressBar::new_spinner();
+    pb.finish_and_clear();
+
+    let attack_requests = vec![format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nContent-Length: 5\r\n\r\ntest1",
+        host
+    )];
+
+    let result = run_checks_for_type(CheckParams {
+        pb: &pb,
+        check_name: "CL.TE",
+        host: &host,
+        port,
+        path: "/",
+        attack_requests: attack_requests
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
+        timeout: 5,
+        verbose: false,
+        use_tls: false,
+        export_dir: None,
+        current_check: 1,
+        total_checks: 1,
+        delay: 0,
+        baseline_count: DEFAULT_BASELINE_COUNT,
+    })
+    .await;
+
+    handle.abort();
+
+    assert!(result.is_ok());
+    let check_result = result.unwrap();
+    assert!(
+        !check_result.vulnerable,
+        "a one-off 504 reproduced only via an unrelated timing signal must not be confirmed"
+    );
+    assert_eq!(check_result.confidence, None);
+}
+
 /// Test: baseline itself returns 504 -> should not flag 504 as smuggling signal
 #[tokio::test]
 async fn test_baseline_504_not_flagged() {

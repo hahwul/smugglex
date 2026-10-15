@@ -314,6 +314,11 @@ pub async fn run_parser_discrepancy_check_with_authority(
     let mut saw_response = false;
     let mut normal_status = "no parser control response".to_string();
     let mut normal_duration_ms = 0;
+    // `normal_duration_ms == 0` can't be used as the "not yet captured"
+    // sentinel: a sub-millisecond control response against a fast local
+    // target (this tool's typical use case) legitimately rounds to 0,
+    // letting a later case silently overwrite the first-observed baseline.
+    let mut normal_captured = false;
     let repetitions = params.baseline_count.clamp(1, 3);
 
     for (index, case) in cases.iter().enumerate() {
@@ -346,9 +351,10 @@ pub async fn run_parser_discrepancy_check_with_authority(
         }
         let control = representative(&controls);
         saw_response |= control.responded();
-        if control.responded() && normal_duration_ms == 0 {
+        if control.responded() && !normal_captured {
             normal_status = control.status_line.clone();
             normal_duration_ms = control.duration.as_millis() as u64;
+            normal_captured = true;
         }
         let probe = observe(
             params.host,
