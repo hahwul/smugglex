@@ -556,17 +556,6 @@ async fn test_current_check_counter() {
 }
 
 #[tokio::test]
-async fn test_error_url_parse() {
-    use smugglex::error::SmugglexError;
-    use url::Url;
-
-    let invalid_url = "not a valid url";
-    let result: Result<Url, SmugglexError> = Url::parse(invalid_url).map_err(|e| e.into());
-
-    assert!(result.is_err());
-}
-
-#[tokio::test]
 async fn test_error_host_validation() {
     use url::Url;
 

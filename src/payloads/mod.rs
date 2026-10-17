@@ -20,16 +20,7 @@ pub fn format_custom_headers(custom_headers: &[String]) -> String {
     if custom_headers.is_empty() {
         String::new()
     } else {
-        let total_len: usize = custom_headers.iter().map(|h| h.len() + 2).sum::<usize>() + 2;
-        let mut result = String::with_capacity(total_len);
-        for (i, header) in custom_headers.iter().enumerate() {
-            if i > 0 {
-                result.push_str("\r\n");
-            }
-            result.push_str(header);
-        }
-        result.push_str("\r\n");
-        result
+        format!("{}\r\n", custom_headers.join("\r\n"))
     }
 }
 
@@ -40,53 +31,4 @@ pub fn format_cookies(cookies: &[String]) -> String {
     } else {
         format!("Cookie: {}\r\n", cookies.join("; "))
     }
-}
-
-/// Helper function to check if a payload contains a Transfer-Encoding related header.
-/// Handles obfuscation techniques including control characters in header names.
-///
-/// Exposed for integration tests in `tests/payloads_tests.rs` which assert that
-/// generated payloads carry a recognizable TE header. Not used by the scanning
-/// pipeline itself.
-pub fn contains_te_header_pattern(payload: &str) -> bool {
-    let payload_lower = payload.to_lowercase();
-
-    // Standard patterns (most reliable)
-    if payload_lower.contains("transfer-encoding")
-        || payload_lower.contains("transfer_encoding") // underjoin pattern
-        || payload_lower.contains("transfer encoding") // spacejoin pattern
-        || payload_lower.contains("transfer\\encoding") // backslash pattern
-        || payload_lower.contains("content-encoding")
-    {
-        // Content-Encoding confusion
-        return true;
-    }
-
-    // URL-encoded patterns
-    if payload_lower.contains("transfer%") || payload_lower.contains("=?") {
-        return true;
-    }
-
-    // Partial patterns for control character obfuscation
-    // These catch cases where control chars (CR, null, etc.) are inserted into header names
-    if payload_lower.contains("nsfer-encoding") // Handles CR in "Tra\rnsfer-Encoding"
-        || payload_lower.contains("encoding: chunked")
-        || payload_lower.contains("encoding:chunked")
-        || payload_lower.contains("encoding:\tchunked")
-    {
-        return true;
-    }
-
-    // Check for "chunked" value which should appear in all TE headers
-    if payload_lower.contains("chunked") {
-        // Also verify there's some encoding-related text nearby
-        if payload_lower.contains("encoding")
-            || payload_lower.contains("encod")
-            || payload_lower.contains("transf")
-        {
-            return true;
-        }
-    }
-
-    false
 }

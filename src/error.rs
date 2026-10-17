@@ -8,8 +8,6 @@ pub enum SmugglexError {
     HttpRequest(String),
     /// TLS connection errors
     Tls(String),
-    /// URL parsing errors
-    UrlParse(String),
     /// I/O errors (file operations)
     Io(String),
     /// JSON serialization/deserialization errors
@@ -34,13 +32,6 @@ impl fmt::Display for SmugglexError {
                 write!(
                     f,
                     "TLS error: {} (verify the target supports HTTPS or try with HTTP)",
-                    msg
-                )
-            }
-            SmugglexError::UrlParse(msg) => {
-                write!(
-                    f,
-                    "URL parsing error: {} (ensure the URL includes scheme, e.g. http:// or https://)",
                     msg
                 )
             }
@@ -76,12 +67,6 @@ impl From<serde_json::Error> for SmugglexError {
     }
 }
 
-impl From<url::ParseError> for SmugglexError {
-    fn from(err: url::ParseError) -> Self {
-        SmugglexError::UrlParse(err.to_string())
-    }
-}
-
 impl From<rustls::Error> for SmugglexError {
     fn from(err: rustls::Error) -> Self {
         SmugglexError::Tls(err.to_string())
@@ -97,12 +82,6 @@ impl From<rustls::pki_types::InvalidDnsNameError> for SmugglexError {
 impl From<tokio::time::error::Elapsed> for SmugglexError {
     fn from(_err: tokio::time::error::Elapsed) -> Self {
         SmugglexError::Timeout("Request timed out".to_string())
-    }
-}
-
-impl From<&str> for SmugglexError {
-    fn from(err: &str) -> Self {
-        SmugglexError::InvalidInput(err.to_string())
     }
 }
 

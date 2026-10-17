@@ -26,6 +26,52 @@ fn lossy_payloads(payloads: Vec<Vec<u8>>) -> Vec<String> {
         .collect()
 }
 
+/// Asserts that a generated payload carries a recognizable Transfer-Encoding
+/// header, including obfuscated forms (control chars, URL-encoding, joins).
+/// Test-only: the scanning pipeline never needs this check.
+fn contains_te_header_pattern(payload: &str) -> bool {
+    let payload_lower = payload.to_lowercase();
+
+    // Standard patterns (most reliable)
+    if payload_lower.contains("transfer-encoding")
+        || payload_lower.contains("transfer_encoding") // underjoin pattern
+        || payload_lower.contains("transfer encoding") // spacejoin pattern
+        || payload_lower.contains("transfer\\encoding") // backslash pattern
+        || payload_lower.contains("content-encoding")
+    {
+        // Content-Encoding confusion
+        return true;
+    }
+
+    // URL-encoded patterns
+    if payload_lower.contains("transfer%") || payload_lower.contains("=?") {
+        return true;
+    }
+
+    // Partial patterns for control character obfuscation
+    // These catch cases where control chars (CR, null, etc.) are inserted into header names
+    if payload_lower.contains("nsfer-encoding") // Handles CR in "Tra\rnsfer-Encoding"
+        || payload_lower.contains("encoding: chunked")
+        || payload_lower.contains("encoding:chunked")
+        || payload_lower.contains("encoding:\tchunked")
+    {
+        return true;
+    }
+
+    // Check for "chunked" value which should appear in all TE headers
+    if payload_lower.contains("chunked") {
+        // Also verify there's some encoding-related text nearby
+        if payload_lower.contains("encoding")
+            || payload_lower.contains("encod")
+            || payload_lower.contains("transf")
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn get_cl_te_payloads(
     path: &str,
     host: &str,

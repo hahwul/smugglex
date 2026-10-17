@@ -563,9 +563,10 @@ fn response_complete_len_for(buf: &[u8], head_request: bool) -> Option<usize> {
 fn is_interim_response(header_block: &[u8]) -> bool {
     let header = String::from_utf8_lossy(header_block);
     let status_line = header.lines().next().unwrap_or_default();
+    // 1xx except 101 (Switching Protocols, which is a final response here).
     matches!(
         crate::utils::parse_status_code(status_line),
-        Some(100..=199) if !matches!(crate::utils::parse_status_code(status_line), Some(101))
+        Some(100 | 102..=199)
     )
 }
 
@@ -730,13 +731,7 @@ pub async fn pipeline_requests(
         }
     }
 
-    Ok(responses
-        .into_iter()
-        .map(|b| match String::from_utf8(b) {
-            Ok(s) => s,
-            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-        })
-        .collect())
+    Ok(responses.into_iter().map(bytes_to_string).collect())
 }
 
 /// Result of an Expect-based, two-phase HTTP/1.1 exchange.
@@ -1040,10 +1035,7 @@ pub async fn send_request_bytes(
     })
     .await??;
 
-    let response_str = match String::from_utf8(result) {
-        Ok(s) => s,
-        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-    };
+    let response_str = bytes_to_string(result);
 
     let duration = start.elapsed();
 

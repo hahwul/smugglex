@@ -9,15 +9,6 @@ pub struct MutatorConfig {
     pub mutations_per_payload: usize,
 }
 
-impl Default for MutatorConfig {
-    fn default() -> Self {
-        Self {
-            seed: 42,
-            mutations_per_payload: 5,
-        }
-    }
-}
-
 /// Lightweight deterministic mutation engine using xorshift64 PRNG.
 pub struct Mutator {
     state: u64,
@@ -251,33 +242,22 @@ impl Mutator {
 
     /// Strategy 8: Duplicate TE or CL header.
     fn mutate_header_duplication(&mut self, payload: &str) -> String {
-        let dup_te = self.rand_index(2) == 0;
-
-        if dup_te {
-            if let Some(header) = find_header_case_insensitive(payload, "transfer-encoding") {
-                let header_line = &payload[header.line_start..header.line_end];
-                let mut result = payload[..header.line_end].to_string();
-                result.push_str(header_line);
-                if !header_line.ends_with('\n') {
-                    result.push_str("\r\n");
-                }
-                result.push_str(&payload[header.line_end..]);
-                result
-            } else {
-                payload.to_string()
-            }
-        } else if let Some(header) = find_header_case_insensitive(payload, "content-length") {
-            let header_line = &payload[header.line_start..header.line_end];
-            let mut result = payload[..header.line_end].to_string();
-            result.push_str(header_line);
-            if !header_line.ends_with('\n') {
-                result.push_str("\r\n");
-            }
-            result.push_str(&payload[header.line_end..]);
-            result
+        let name = if self.rand_index(2) == 0 {
+            "transfer-encoding"
         } else {
-            payload.to_string()
+            "content-length"
+        };
+        let Some(header) = find_header_case_insensitive(payload, name) else {
+            return payload.to_string();
+        };
+        let header_line = &payload[header.line_start..header.line_end];
+        let mut result = payload[..header.line_end].to_string();
+        result.push_str(header_line);
+        if !header_line.ends_with('\n') {
+            result.push_str("\r\n");
         }
+        result.push_str(&payload[header.line_end..]);
+        result
     }
 
     /// Strategy 9: Add body padding after chunked terminator.
@@ -672,7 +652,10 @@ mod tests {
     #[test]
     fn test_empty_seeds() {
         let seeds: Vec<String> = vec![];
-        let mut m = Mutator::new(MutatorConfig::default());
+        let mut m = Mutator::new(MutatorConfig {
+            seed: 42,
+            mutations_per_payload: 5,
+        });
         let result = m.mutate_payloads(&seeds);
         assert!(result.is_empty());
     }

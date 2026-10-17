@@ -55,14 +55,14 @@ fn has_any_known_name(requested: &str, known: &[&str]) -> bool {
 /// Return the names in a comma-separated `--checks` value that match no known
 /// check (trimmed; empty segments ignored). An empty result means every
 /// requested name was recognized.
-pub fn unknown_check_names(requested: &str, known: &[&str]) -> Vec<String> {
-    unknown_names(requested, known)
+pub fn unknown_check_names(requested: &str) -> Vec<String> {
+    unknown_names(requested, &KNOWN_CHECK_NAMES)
 }
 
 /// Whether `requested` selects at least one known check. False means a typo'd
 /// `--checks` that would otherwise scan nothing.
-pub fn has_any_known_check(requested: &str, known: &[&str]) -> bool {
-    has_any_known_name(requested, known)
+pub fn has_any_known_check(requested: &str) -> bool {
+    has_any_known_name(requested, &KNOWN_CHECK_NAMES)
 }
 
 /// Return the names in a comma-separated `--exploit` value that match no known
@@ -381,29 +381,29 @@ mod tests {
     fn unknown_check_names_flags_only_unrecognized() {
         // A mix of valid and typo'd names returns just the unknown ones.
         assert_eq!(
-            unknown_check_names("clte,cl-te,h2", &KNOWN_CHECK_NAMES),
+            unknown_check_names("clte,cl-te,h2"),
             vec!["clte".to_string()]
         );
         // All valid → empty.
-        assert!(unknown_check_names("cl-te, te-cl , h2-downgrade", &KNOWN_CHECK_NAMES).is_empty());
+        assert!(unknown_check_names("cl-te, te-cl , h2-downgrade").is_empty());
         // Empty segments are ignored.
-        assert!(unknown_check_names("cl-te,,  ,h2", &KNOWN_CHECK_NAMES).is_empty());
+        assert!(unknown_check_names("cl-te,,  ,h2").is_empty());
         // All invalid → every name reported.
         assert_eq!(
-            unknown_check_names("clte,CL-TE,cl_te", &KNOWN_CHECK_NAMES),
+            unknown_check_names("clte,CL-TE,cl_te"),
             vec!["clte".to_string(), "CL-TE".to_string(), "cl_te".to_string()]
         );
     }
 
     #[test]
     fn has_any_known_check_detects_all_typos() {
-        assert!(has_any_known_check("clte,cl-te", &KNOWN_CHECK_NAMES));
-        assert!(has_any_known_check("h2-downgrade", &KNOWN_CHECK_NAMES));
+        assert!(has_any_known_check("clte,cl-te"));
+        assert!(has_any_known_check("h2-downgrade"));
         // A wholly typo'd selection must report no known check (the dangerous
         // case: scanning nothing while reporting a clean target).
-        assert!(!has_any_known_check("clte", &KNOWN_CHECK_NAMES));
-        assert!(!has_any_known_check("CL-TE,cl_te", &KNOWN_CHECK_NAMES));
-        assert!(!has_any_known_check("  , ,", &KNOWN_CHECK_NAMES));
+        assert!(!has_any_known_check("clte"));
+        assert!(!has_any_known_check("CL-TE,cl_te"));
+        assert!(!has_any_known_check("  , ,"));
     }
 
     #[test]

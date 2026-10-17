@@ -38,51 +38,6 @@ fn strings_to_bytes(payloads: Vec<String>) -> Vec<Vec<u8>> {
     payloads.into_iter().map(String::into_bytes).collect()
 }
 
-// Byte-oriented adapters for the pure-ASCII payload families (h2c/h2/cl-edge),
-// which still build `Vec<String>`. They let the whole `all_checks` dispatch table
-// share one `fn(...) -> Vec<Vec<u8>>` signature alongside the raw-byte TE families.
-fn h2c_payloads_bytes(
-    path: &str,
-    host: &str,
-    method: &str,
-    custom_headers: &[String],
-    cookies: &[String],
-) -> Vec<Vec<u8>> {
-    strings_to_bytes(get_h2c_payloads(
-        path,
-        host,
-        method,
-        custom_headers,
-        cookies,
-    ))
-}
-
-fn h2_payloads_bytes(
-    path: &str,
-    host: &str,
-    method: &str,
-    custom_headers: &[String],
-    cookies: &[String],
-) -> Vec<Vec<u8>> {
-    strings_to_bytes(get_h2_payloads(path, host, method, custom_headers, cookies))
-}
-
-fn cl_edge_payloads_bytes(
-    path: &str,
-    host: &str,
-    method: &str,
-    custom_headers: &[String],
-    cookies: &[String],
-) -> Vec<Vec<u8>> {
-    strings_to_bytes(get_cl_edge_case_payloads(
-        path,
-        host,
-        method,
-        custom_headers,
-        cookies,
-    ))
-}
-
 #[derive(Debug)]
 struct ExploitParams<'a> {
     exploit_str: &'a str,
@@ -274,8 +229,7 @@ async fn main() -> Result<()> {
     // Validate `--checks` up front (target-independent): a typo must not
     // silently scan nothing and report a clean target with exit 0.
     if let Some(ref checks_str) = cli.checks {
-        let unknown =
-            smugglex::cli::unknown_check_names(checks_str, &smugglex::cli::KNOWN_CHECK_NAMES);
+        let unknown = smugglex::cli::unknown_check_names(checks_str);
         if !unknown.is_empty() {
             emit_input_error(
                 &cli,
@@ -287,7 +241,7 @@ async fn main() -> Result<()> {
             );
             std::process::exit(2);
         }
-        if !smugglex::cli::has_any_known_check(checks_str, &smugglex::cli::KNOWN_CHECK_NAMES) {
+        if !smugglex::cli::has_any_known_check(checks_str) {
             emit_input_error(
                 &cli,
                 &format!(
@@ -795,9 +749,17 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         ),
         ("te-cl", get_te_cl_payloads),
         ("te-te", get_te_te_payloads),
-        ("h2c", h2c_payloads_bytes),
-        ("h2", h2_payloads_bytes),
-        ("cl-edge", cl_edge_payloads_bytes),
+        // h2c/h2/cl-edge are pure ASCII and still return `Vec<String>`; these
+        // non-capturing closures adapt them to the table's byte signature.
+        ("h2c", |p, h, m, c, k| {
+            strings_to_bytes(get_h2c_payloads(p, h, m, c, k))
+        }),
+        ("h2", |p, h, m, c, k| {
+            strings_to_bytes(get_h2_payloads(p, h, m, c, k))
+        }),
+        ("cl-edge", |p, h, m, c, k| {
+            strings_to_bytes(get_cl_edge_case_payloads(p, h, m, c, k))
+        }),
     ];
 
     let checks_to_run: Vec<_> = if let Some(ref checks_str) = cli.checks {

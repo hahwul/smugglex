@@ -145,25 +145,6 @@ pub fn log_plain_results(results: &[CheckResult], vulnerable_count: usize) {
     }
 }
 
-/// Serialize scan results to JSON and write them to a file.
-pub fn save_results_to_file(
-    output_file: &str,
-    target_url: &str,
-    method: &str,
-    results: Vec<CheckResult>,
-    fingerprint_info: &Option<FingerprintInfo>,
-) -> Result<()> {
-    let scan_results = ScanResults {
-        target: target_url.to_string(),
-        method: method.to_string(),
-        timestamp: Utc::now().to_rfc3339(),
-        fingerprint: fingerprint_info.clone(),
-        checks: results,
-        error: None,
-    };
-    save_scan_results_to_file(&scan_results, output_file)
-}
-
 /// Serialize a fully-built [`ScanResults`] to JSON and write it to a file,
 /// preserving every field (including `error`). Used for single-target plain-mode
 /// `-o` output where the results have already been assembled.

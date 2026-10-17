@@ -29,16 +29,6 @@ fn test_display_tls_error() {
     );
 }
 
-/// Test Display implementation for UrlParse variant
-#[test]
-fn test_display_url_parse_error() {
-    let err = SmugglexError::UrlParse("invalid URL".to_string());
-    assert_eq!(
-        format!("{}", err),
-        "URL parsing error: invalid URL (ensure the URL includes scheme, e.g. http:// or https://)"
-    );
-}
-
 /// Test Display implementation for Io variant
 #[test]
 fn test_display_io_error() {
@@ -129,27 +119,6 @@ fn test_from_serde_json_error() {
             );
         }
         _ => panic!("Expected Json error variant"),
-    }
-}
-
-/// Test From<url::ParseError> implementation
-#[test]
-fn test_from_url_parse_error() {
-    let url_err = url::Url::parse("http://[::1").unwrap_err();
-    let smugglex_err: SmugglexError = url_err.into();
-    match smugglex_err {
-        SmugglexError::UrlParse(msg) => assert!(msg.contains("invalid") || msg.contains("port")),
-        _ => panic!("Expected UrlParse error variant"),
-    }
-}
-
-/// Test From<&str> implementation
-#[test]
-fn test_from_str() {
-    let smugglex_err: SmugglexError = "test error message".into();
-    match smugglex_err {
-        SmugglexError::InvalidInput(msg) => assert_eq!(msg, "test error message"),
-        _ => panic!("Expected InvalidInput error variant"),
     }
 }
 

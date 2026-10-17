@@ -3,8 +3,29 @@
 //! This module tests result formatting and file saving logic.
 
 use smugglex::model::{BatchScanResults, CheckResult, FingerprintInfo, ScanResults};
-use smugglex::output::{build_batch_results, save_batch_to_file, save_results_to_file};
+use smugglex::output::{build_batch_results, save_batch_to_file, save_scan_results_to_file};
 use std::fs;
+
+/// Build a `ScanResults` from loose parts and save it, mirroring the single-target
+/// `-o` path. Lives here because production assembles `ScanResults` itself and calls
+/// `save_scan_results_to_file` directly.
+fn save_results_to_file(
+    output_file: &str,
+    target_url: &str,
+    method: &str,
+    results: Vec<CheckResult>,
+    fingerprint_info: &Option<FingerprintInfo>,
+) -> smugglex::error::Result<()> {
+    let scan_results = ScanResults {
+        target: target_url.to_string(),
+        method: method.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        fingerprint: fingerprint_info.clone(),
+        checks: results,
+        error: None,
+    };
+    save_scan_results_to_file(&scan_results, output_file)
+}
 
 fn sample_check_result(check_type: &str, vulnerable: bool) -> CheckResult {
     CheckResult {
