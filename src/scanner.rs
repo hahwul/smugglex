@@ -11,6 +11,14 @@ use std::time::Duration;
 pub const TIMING_MULTIPLIER: u128 = 3;
 /// Minimum response delay in milliseconds to consider as suspicious
 pub const MIN_DELAY_MS: u128 = 1000;
+
+/// A response exhibits a timing anomaly when it is both slower than the
+/// baseline-derived `timing_threshold` AND past the absolute `MIN_DELAY_MS`
+/// floor. This single definition is shared by detection, confirmation, and
+/// confidence scoring so those three never silently disagree.
+fn has_timing_anomaly(millis: u128, timing_threshold: u128) -> bool {
+    millis > timing_threshold && millis > MIN_DELAY_MS
+}
 /// Default number of baseline requests for timing measurement
 pub const DEFAULT_BASELINE_COUNT: usize = 3;
 /// Number of retries used to confirm a detected vulnerability.
@@ -534,8 +542,7 @@ async fn check_single_payload(
             let baseline_timeout_majority = baseline_majority_timeout(params.baseline_status_codes);
             let is_timeout_error =
                 matches!(status_code, Some(408) | Some(504)) && !baseline_timeout_majority;
-            let is_delayed =
-                attack_millis > params.timing_threshold && attack_millis > MIN_DELAY_MS;
+            let is_delayed = has_timing_anomaly(attack_millis, params.timing_threshold);
 
             if is_timeout_error || is_delayed {
                 Ok(Some(VulnerabilityInfo {
@@ -570,7 +577,10 @@ async fn check_single_payload(
 /// Outcome of vulnerability confirmation across retries.
 struct ConfirmationResult {
     confirmed: bool,
-    /// Attack durations from each successful confirmation retry.
+    /// Attack durations from confirmation retries that reproduced the SAME
+    /// signal as the initial detection (foreign-signal retries are excluded so
+    /// they can't skew the reported median). Combined with the initial
+    /// detection's duration by the caller.
     durations: Vec<Duration>,
 }
 
@@ -1179,12 +1189,48 @@ fn control_indicates_false_positive(
     false
 }
 
+/// "Status-only": detection fired on a 408/504 status WITHOUT a timing anomaly.
+/// A timing anomaly requires BOTH duration > timing_threshold AND duration >
+/// MIN_DELAY_MS (see `is_delayed` in check_single_payload), so "no timing
+/// anomaly" is the negation of that conjunction — not merely
+/// `duration <= timing_threshold`.
+fn is_status_only(info: &VulnerabilityInfo, timing_threshold: u128) -> bool {
+    !info.is_connection_timeout
+        && matches!(info.status_code, Some(408) | Some(504))
+        && !has_timing_anomaly(info.duration.as_millis(), timing_threshold)
+}
+
+/// Whether a confirmation retry reproduced the SAME anomaly signal as the
+/// initial detection. Each category requires its own signal to recur:
+/// - timing-initial: a timing anomaly that is NOT a connection timeout. A
+///   transport timeout has duration == the full timeout (so it trivially clears
+///   the threshold) yet is a different signal — counting it would confirm a
+///   merely-overloaded backend as a timing finding.
+/// - status-only-initial: a status-only (408/504 without timing anomaly) retry.
+/// - connection-timeout-initial: a connection timeout.
+fn retry_reproduces_initial(
+    initial_is_timeout: bool,
+    initial_is_status_only: bool,
+    retry: &VulnerabilityInfo,
+    timing_threshold: u128,
+) -> bool {
+    if initial_is_timeout {
+        retry.is_connection_timeout
+    } else if initial_is_status_only {
+        is_status_only(retry, timing_threshold)
+    } else {
+        has_timing_anomaly(retry.duration.as_millis(), timing_threshold)
+            && !retry.is_connection_timeout
+    }
+}
+
 /// Confirm a detected vulnerability by retrying CONFIRMATION_RETRIES times.
 /// - Connection-level timeouts: ALL retries must reproduce (strict; networks are noisy).
 /// - Status-only (408/504 without timing anomaly): ALL retries must reproduce —
 ///   intermittent gateway-timeout responses are a common non-smuggling cause
 ///   and would otherwise pass strict-majority on a single fluke.
-/// - Status+timing or timing-only signals: strict majority (>N/2) must reproduce.
+/// - Status+timing or timing-only signals: strict majority (>N/2) must reproduce,
+///   counting only retries that reproduced the timing signal (not transport timeouts).
 async fn confirm_vulnerability(
     params: &PayloadCheckParams<'_>,
     initial: &VulnerabilityInfo,
@@ -1196,43 +1242,43 @@ async fn confirm_vulnerability(
     // `duration <= timing_threshold`. The old check missed the gray zone where
     // timing_threshold < duration <= MIN_DELAY_MS, wrongly applying lenient
     // strict-majority confirmation to what is really a status-only signal.
-    let is_status_only = |info: &VulnerabilityInfo| {
-        let millis = info.duration.as_millis();
-        let has_timing_anomaly = millis > params.timing_threshold && millis > MIN_DELAY_MS;
-        !info.is_connection_timeout
-            && matches!(info.status_code, Some(408) | Some(504))
-            && !has_timing_anomaly
-    };
-    let initial_is_status_only = is_status_only(initial);
+    let initial_is_status_only = is_status_only(initial, params.timing_threshold);
 
     let mut durations = Vec::with_capacity(CONFIRMATION_RETRIES);
-    // For the strict categories (connection-timeout / status-only), a retry
-    // only counts toward "reproduced" when it fires via the SAME signal as the
-    // initial detection — not merely *some* signal. Without this, a one-off
-    // 408/504 that never recurs can still be "confirmed" by ordinary network
-    // jitter pushing unrelated retries past the timing threshold, silently
-    // promoting a noisy backend to a confirmed, high-confidence finding.
+    // A retry only counts toward "reproduced" when it fires via the SAME signal
+    // as the initial detection — not merely *some* signal. This matters for the
+    // timing category too: a connection-timeout retry has duration == the full
+    // timeout (so it trivially clears the timing threshold) but is a transport
+    // failure, not the timing anomaly we detected. Counting such foreign-signal
+    // retries would silently promote a merely-overloaded backend to a confirmed,
+    // high-confidence timing finding.
     let mut matching_retries = 0usize;
     for _ in 0..CONFIRMATION_RETRIES {
         if let Ok(Some(info)) = check_single_payload(params).await {
-            let matches_initial_category = if initial.is_connection_timeout {
-                info.is_connection_timeout
-            } else if initial_is_status_only {
-                is_status_only(&info)
-            } else {
-                true
-            };
-            if matches_initial_category {
+            // Only same-signal retries count toward confirmation AND feed the
+            // reported median duration. A foreign-signal retry (e.g. a transport
+            // connection timeout during a timing confirmation) has duration ==
+            // the full timeout; collecting it would inflate the latency the
+            // finding reports (and its confidence) even though it did not
+            // reproduce the detected signal.
+            if retry_reproduces_initial(
+                initial.is_connection_timeout,
+                initial_is_status_only,
+                &info,
+                params.timing_threshold,
+            ) {
                 matching_retries += 1;
+                durations.push(info.duration);
             }
-            durations.push(info.duration);
         }
     }
 
+    // Both branches key off matching_retries (same-signal reproduction): strict
+    // categories require unanimity, a timing anomaly a strict majority.
     let confirmed = if initial.is_connection_timeout || initial_is_status_only {
         matching_retries == CONFIRMATION_RETRIES
     } else {
-        durations.len() * 2 > CONFIRMATION_RETRIES
+        matching_retries * 2 > CONFIRMATION_RETRIES
     };
 
     ConfirmationResult {
@@ -1269,7 +1315,7 @@ fn compute_confidence(
 
     let is_timeout_status = matches!(info.status_code, Some(408) | Some(504));
     let attack_millis = info.duration.as_millis();
-    let is_timing_anomaly = attack_millis > timing_threshold && attack_millis > MIN_DELAY_MS;
+    let is_timing_anomaly = has_timing_anomaly(attack_millis, timing_threshold);
     let is_extreme_timing = timing_threshold > 0
         && attack_millis > timing_threshold * 2
         && attack_millis > MIN_DELAY_MS * 2;
@@ -1308,7 +1354,7 @@ fn collect_detection_signals(
     }
     let attack_ms = info.duration.as_millis();
     let normal_ms = normal_duration.as_millis();
-    if attack_ms > timing_threshold && attack_ms > MIN_DELAY_MS {
+    if has_timing_anomaly(attack_ms, timing_threshold) {
         let ratio = if normal_ms > 0 {
             attack_ms as f64 / normal_ms as f64
         } else {
@@ -1694,6 +1740,12 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                 consecutive_fp_rejections = 0;
             }
             Err(e) => {
+                // A transient network error is neither a detection nor a
+                // control-FP rejection, so it breaks the "consecutive" chain the
+                // FP-streak limit counts — reset it, as the Ok(None) arm does.
+                // Otherwise FP, FP, Err, FP would abandon the check on flaky
+                // networks (false negative).
+                consecutive_fp_rejections = 0;
                 if params.verbose {
                     println!(
                         "\n{} Error during {} attack request (payload {}): {}",
@@ -2038,6 +2090,99 @@ mod tests {
             CONSECUTIVE_FP_REJECTIONS_LIMIT >= 2,
             "limit should require at least 2 consecutive rejections"
         );
+    }
+
+    fn info(duration_ms: u64, status_code: Option<u16>, is_timeout: bool) -> VulnerabilityInfo {
+        VulnerabilityInfo {
+            status: String::new(),
+            status_code,
+            duration: Duration::from_millis(duration_ms),
+            body_length: 0,
+            header_fingerprint: ResponseHeaderFingerprint::default(),
+            is_connection_timeout: is_timeout,
+        }
+    }
+
+    #[test]
+    fn timing_initial_not_reproduced_by_connection_timeout() {
+        // Regression: a timing-initial detection must NOT be confirmed by a
+        // connection-timeout retry. The timeout's duration (== full timeout)
+        // trivially clears the threshold, but it is a different signal; counting
+        // it would confirm a merely-overloaded backend as a timing finding.
+        let threshold = 1000u128; // ms; MIN_DELAY_MS also applies
+        let min = MIN_DELAY_MS as u64;
+        let timing_retry = info(threshold as u64 + min + 500, Some(200), false);
+        let timeout_retry = info(60_000, Some(0), true); // huge duration, transport timeout
+
+        // timing-initial (not timeout, not status-only)
+        assert!(retry_reproduces_initial(
+            false,
+            false,
+            &timing_retry,
+            threshold
+        ));
+        assert!(!retry_reproduces_initial(
+            false,
+            false,
+            &timeout_retry,
+            threshold
+        ));
+
+        // connection-timeout-initial: only a timeout retry reproduces
+        assert!(retry_reproduces_initial(
+            true,
+            false,
+            &timeout_retry,
+            threshold
+        ));
+        assert!(!retry_reproduces_initial(
+            true,
+            false,
+            &timing_retry,
+            threshold
+        ));
+
+        // status-only-initial reproduces only on another status-only (408/504
+        // WITHOUT a timing anomaly) retry. A 504 slow enough to ALSO trip the
+        // timing anomaly is a different signal and must NOT count — this keeps a
+        // slow retry from inflating a status-only finding's reported latency into
+        // a false High-confidence timing result.
+        let slow_504 = info(threshold as u64 + min + 500, Some(504), false);
+        let fast_504 = info(10, Some(504), false);
+        assert!(!retry_reproduces_initial(false, true, &slow_504, threshold));
+        assert!(retry_reproduces_initial(false, true, &fast_504, threshold));
+        assert!(!retry_reproduces_initial(
+            false,
+            true,
+            &timeout_retry,
+            threshold
+        ));
+        assert!(!retry_reproduces_initial(
+            false,
+            true,
+            &info(10, Some(200), false),
+            threshold
+        ));
+    }
+
+    #[test]
+    fn status_only_classification() {
+        let threshold = 1000u128;
+        // 504 without timing anomaly -> status-only
+        assert!(is_status_only(&info(10, Some(504), false), threshold));
+        // 504 WITH timing anomaly -> not status-only (timing dominates)
+        assert!(!is_status_only(
+            &info(
+                threshold as u64 + MIN_DELAY_MS as u64 + 500,
+                Some(504),
+                false
+            ),
+            threshold
+        ));
+        // connection timeout is never status-only
+        assert!(!is_status_only(&info(60_000, Some(504), true), threshold));
+        // non-gateway status is never status-only
+        assert!(!is_status_only(&info(10, Some(200), false), threshold));
     }
 
     #[test]
