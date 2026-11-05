@@ -297,9 +297,42 @@ async fn h2_probe(
     timeout: Duration,
 ) -> H2Outcome {
     let start = Instant::now();
-    let result = tokio::time::timeout(timeout, async {
-        let mut stream = h2_connect(host, port).await?;
 
+    // Connect (TCP + TLS) under its own slice of the budget. A connect that
+    // FAILS and a connect that HANGS are the same transport problem, so both map
+    // to a fast reset — never a stall. The old code folded the connect into the
+    // same timeout as the exchange, so a hanging connect (timeout) was
+    // classified as a stream stall — a false smuggling signal on hosts with
+    // intermittently slow/hanging connects, while a connect *error* was benign.
+    let mut stream = match tokio::time::timeout(timeout, h2_connect(host, port)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(_)) | Err(_) => {
+            return H2Outcome {
+                responded: false,
+                status: None,
+                reset: true,
+                duration: start.elapsed(),
+            };
+        }
+    };
+
+    // Only a stall during the request/response exchange is the smuggling signal.
+    // The exchange gets the FULL `timeout` budget measured from AFTER the connect,
+    // and the reported `duration` is the exchange time alone — never
+    // connect+exchange. `stalled()` gates on duration >= 80% of `timeout`, so
+    // measuring the exchange against its own full budget is self-consistent: a
+    // genuine stall reads as ~timeout (true positive) regardless of how long the
+    // connect took, and a fast exchange after a slow connect reads as short (no
+    // false stall). A split budget would instead shrink the exchange window after
+    // a slow connect and drop real stalls.
+    //
+    // ponytail: worst-case one probe is connect(<=timeout) + exchange(<=timeout)
+    // ~= 2*timeout, but only when the connect itself is pathologically slow
+    // (seconds); healthy hosts connect in ms so the total stays ~timeout. Chosen
+    // over a shared budget because correctness (no false pos/neg) beats a tighter
+    // wall-clock bound here. Tighten with a dedicated connect cap if it matters.
+    let exchange_start = Instant::now();
+    let result = tokio::time::timeout(timeout, async {
         let mut out = Vec::new();
         out.extend_from_slice(PREFACE);
         put_frame(&mut out, FRAME_SETTINGS, 0, 0, &[])?;
@@ -317,25 +350,26 @@ async fn h2_probe(
         read_response(&mut stream).await
     })
     .await;
+    let exchange = exchange_start.elapsed();
 
     match result {
         Ok(Ok(outcome)) => H2Outcome {
-            duration: start.elapsed(),
+            duration: exchange,
             ..outcome
         },
-        // Connection/IO error: treat as a fast reset, not a stall.
+        // IO error on the exchange: treat as a fast reset, not a stall.
         Ok(Err(_)) => H2Outcome {
             responded: false,
             status: None,
             reset: true,
-            duration: start.elapsed(),
+            duration: exchange,
         },
-        // Timed out: the stream stalled — the smuggling signal.
+        // Timed out after a successful connect: the stream stalled — the signal.
         Err(_) => H2Outcome {
             responded: false,
             status: None,
             reset: false,
-            duration: start.elapsed(),
+            duration: exchange,
         },
     }
 }
@@ -853,6 +887,46 @@ mod tests {
             duration: Duration::from_millis(200),
         };
         assert!(!stalled(&ok, to));
+    }
+
+    #[tokio::test]
+    async fn hanging_connect_is_reset_not_stall() {
+        // Regression: a TLS handshake that never completes (a plain-TCP peer
+        // that accepts but never speaks) is a transport failure and must be a
+        // benign reset — NOT a stream stall, which would be a false smuggling
+        // signal. The old code folded the connect into the exchange timeout, so
+        // this hanging connect was misreported as a stall.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let mut held = Vec::new();
+            // Hold every accepted connection open, never responding, so the
+            // client's TLS handshake hangs until its timeout fires.
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+
+        let req = H2Request {
+            method: "GET",
+            authority: "127.0.0.1",
+            path: "/",
+            extra: Vec::new(),
+            content_length: None,
+            body: b"",
+        };
+        let timeout = Duration::from_millis(600);
+        let outcome = h2_probe(&addr.ip().to_string(), addr.port(), &req, true, timeout).await;
+        handle.abort();
+
+        assert!(
+            outcome.reset,
+            "a hanging connect must be classified as a reset"
+        );
+        assert!(
+            !stalled(&outcome, timeout),
+            "a hanging connect must not count as a stream stall"
+        );
     }
 
     #[test]
