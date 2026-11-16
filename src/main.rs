@@ -816,19 +816,11 @@ async fn scan_one_target(target: String, cli: Cli) -> ScanOutcome {
         cli.checks,
         Some(ref s) if s.split(',').any(|x| x.trim() == "0-cl")
     );
-    if !is_machine() {
-        if h2_explicitly_requested && !use_tls {
-            log(
-                LogLevel::Warning,
-                "h2-downgrade requires an https target (ALPN h2); skipping it for this non-TLS URL",
-            );
-        }
-        if h2_downgrade_selected && cli.proxy.is_some() {
-            log(
-                LogLevel::Warning,
-                "h2-downgrade connects directly and does not route through --proxy",
-            );
-        }
+    if !is_machine() && h2_explicitly_requested && !use_tls {
+        log(
+            LogLevel::Warning,
+            "h2-downgrade requires an https target (ALPN h2); skipping it for this non-TLS URL",
+        );
     }
     let total_checks = checks_to_run.len()
         + parser_discrepancy_selected as usize
