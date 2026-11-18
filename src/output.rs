@@ -7,10 +7,7 @@ use crate::error::Result;
 use crate::model::{BatchScanResults, BatchSummary, CheckResult, FingerprintInfo, ScanResults};
 use crate::utils::{LogLevel, log};
 
-/// Monotonic counter making each temp filename unique *within* a process, so two
-/// concurrent writers (e.g. `-j >1 -o file` in plain mode, where every target
-/// task writes the same destination) never share a temp path. The PID alone is
-/// not enough: all those tasks run under one PID.
+/// Monotonic counter so concurrent writers in one process use distinct paths.
 static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Atomically write `contents` to `path`: write to a sibling temp file, flush,
@@ -35,11 +32,20 @@ fn atomic_write(path: &str, contents: &str) -> std::io::Result<()> {
         None => std::path::PathBuf::from(tmp_name),
     };
 
-    let write = (|| {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(contents.as_bytes())?;
-        f.flush()
-    })();
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    // Only clean up a temp file after this call has created it.
+    let mut file = options.open(&tmp)?;
+    let write = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.flush());
+    drop(file);
     if let Err(e) = write.and_then(|()| fs::rename(&tmp, dest)) {
         let _ = fs::remove_file(&tmp);
         return Err(e);
@@ -262,8 +268,8 @@ mod tests {
 
     #[test]
     fn atomic_write_concurrent_writers_do_not_corrupt() {
-        // Many threads write the SAME destination at once (the plain-mode
-        // `-j>1 -o file` scenario). Each uses a distinct temp file, so the final
+        // Many threads write the SAME destination at once.
+        // Each uses a distinct temp file, so the final
         // content is always exactly one writer's payload — never a truncated or
         // interleaved mix — and no temp files are left behind.
         let dir = std::env::temp_dir().join(format!("smugglex-atomic-conc-{}", std::process::id()));

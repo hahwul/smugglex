@@ -6,6 +6,41 @@ use smugglex::model::{BatchScanResults, CheckResult, FingerprintInfo, ScanResult
 use smugglex::output::{build_batch_results, save_batch_to_file, save_scan_results_to_file};
 use std::fs;
 
+#[test]
+fn test_output_temp_collision_preserves_existing_files() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let dir =
+        std::env::temp_dir().join(format!("smugglex-output-collision-{}", std::process::id()));
+    fs::create_dir(&dir).unwrap();
+    let output_file = dir.join("report.json");
+    fs::write(&output_file, "previous report").unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_smugglex"))
+        .args(["--json", "-o"])
+        .arg(&output_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let temp_file = dir.join(format!(".report.json.{}.0.tmp", child.id()));
+    fs::write(&temp_file, "unrelated file").unwrap();
+
+    // Feed an invalid URL so the CLI emits a report without connecting anywhere.
+    child.stdin.take().unwrap().write_all(b":\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let previous_report = fs::read_to_string(output_file);
+    let unrelated_file = fs::read_to_string(temp_file);
+    fs::remove_dir_all(dir).unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("failed to write batch output file"));
+    assert_eq!(previous_report.unwrap(), "previous report");
+    assert_eq!(unrelated_file.unwrap(), "unrelated file");
+}
+
 /// Build a `ScanResults` from loose parts and save it, mirroring the single-target
 /// `-o` path. Lives here because production assembles `ScanResults` itself and calls
 /// `save_scan_results_to_file` directly.
@@ -62,6 +97,15 @@ fn test_save_results_to_file_creates_json() {
     assert_eq!(parsed.method, "GET");
     assert_eq!(parsed.checks.len(), 1);
     assert!(parsed.checks[0].vulnerable);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(output_path).unwrap().permissions().mode() & 0o077,
+            0
+        );
+    }
 
     // Cleanup
     fs::remove_file(output_path).ok();

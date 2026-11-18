@@ -99,6 +99,8 @@ Exit codes:
 - `1` — At least one vulnerability found
 - `2` — Usage / input error
 
+On Unix, reports written with `-o` are created with mode `0600` before applying the process umask, including when replacing an existing report.
+
 See the [Pipeline Guide](https://smugglex.hahwul.com/advanced/pipeline/) and [Output Formats](https://smugglex.hahwul.com/usage/output/) for more.
 
 ## Troubleshooting
