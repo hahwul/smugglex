@@ -1180,13 +1180,8 @@ fn control_indicates_false_positive(
     // → the slowness is intrinsic to the request shape, not the smuggling.
     let attack_ms = attack.duration.as_millis();
     let control_ms = control.duration.as_millis();
-    if attack_ms > 0
+    attack_ms > 0
         && control_ms.saturating_mul(100) >= attack_ms.saturating_mul(CONTROL_SIMILARITY_PCT)
-    {
-        return true;
-    }
-
-    false
 }
 
 /// "Status-only": detection fired on a 408/504 status WITHOUT a timing anomaly.
