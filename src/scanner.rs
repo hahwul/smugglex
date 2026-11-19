@@ -969,7 +969,7 @@ async fn observe_followup_divergence(
 }
 
 /// True when a follow-up probe status structurally diverges from the baseline:
-/// it differs from the baseline status AND is not a 5xx gateway/server error.
+/// it differs from the baseline status AND neither side is a 5xx gateway/server error.
 /// 5xx responses (502/503/504) are flake-prone and already covered by the
 /// timing/status confirmation path, so excluding them keeps the unconditional
 /// second-request probe from firing on transient upstream errors.
@@ -980,7 +980,9 @@ fn followup_status_diverged(status_code: Option<u16>, baseline_status: Option<u1
         // (e.g. a normal `200`) must not be treated as diverged — otherwise every
         // clean follow-up would look like a shift and trivially corroborate a
         // false positive.
-        Some(c) if c < 500 => baseline_status.is_some() && status_code != baseline_status,
+        Some(c) if c < 500 => {
+            baseline_status.is_some_and(|b| b < 500) && status_code != baseline_status
+        }
         _ => false,
     }
 }
@@ -1130,6 +1132,7 @@ fn control_indicates_false_positive(
     attack: &VulnerabilityInfo,
     control: &ControlObservation,
     followup: Option<&FollowupObservation>,
+    timing_threshold: u128,
 ) -> bool {
     // ESCAPE: post-attack follow-up GETs diverged from baseline → backend state
     // was perturbed by the attack and persisted into a subsequent request.
@@ -1174,6 +1177,17 @@ fn control_indicates_false_positive(
     let control_is_timeout_status = matches!(control.status_code, Some(408) | Some(504));
     if attack_is_timeout_status && control_is_timeout_status {
         return true;
+    }
+
+    // ESCAPE: a status-only finding (fast 408/504, no timing anomaly) against a
+    // control that answered cleanly (2xx/3xx, no timeouts). The status flip is
+    // the signal; the timing-similarity rule below only judges slowness. 4xx/5xx
+    // controls are ambiguous (parse rejection, flapping backend) and fall through.
+    if is_status_only(attack, timing_threshold)
+        && !control.is_connection_timeout
+        && control.status_code.is_some_and(|c| (200..400).contains(&c))
+    {
+        return false;
     }
 
     // Control duration is within CONTROL_SIMILARITY_PCT% of the attack duration
@@ -1683,6 +1697,7 @@ pub async fn run_checks_for_type(params: CheckParams<'_>) -> Result<CheckResult>
                             &info,
                             control,
                             followup_observation.as_ref(),
+                            timing_threshold,
                         )
                     {
                         if params.verbose {
@@ -1938,7 +1953,9 @@ mod tests {
             header_fingerprint: ResponseHeaderFingerprint::default(),
             is_connection_timeout: false,
         };
-        assert!(control_indicates_false_positive(&attack, &control, None));
+        assert!(control_indicates_false_positive(
+            &attack, &control, None, 1000
+        ));
     }
 
     #[test]
@@ -1958,7 +1975,9 @@ mod tests {
             header_fingerprint: ResponseHeaderFingerprint::default(),
             is_connection_timeout: false,
         };
-        assert!(control_indicates_false_positive(&attack, &control, None));
+        assert!(control_indicates_false_positive(
+            &attack, &control, None, 1000
+        ));
     }
 
     #[test]
@@ -2022,7 +2041,9 @@ mod tests {
             header_fingerprint: ResponseHeaderFingerprint::default(),
             is_connection_timeout: false,
         };
-        assert!(!control_indicates_false_positive(&attack, &control, None));
+        assert!(!control_indicates_false_positive(
+            &attack, &control, None, 1000
+        ));
     }
 
     #[test]
@@ -2073,7 +2094,9 @@ mod tests {
             header_fingerprint: ResponseHeaderFingerprint::default(),
             is_connection_timeout: false,
         };
-        assert!(!control_indicates_false_positive(&attack, &control, None));
+        assert!(!control_indicates_false_positive(
+            &attack, &control, None, 1000
+        ));
     }
 
     #[test]
@@ -2323,7 +2346,9 @@ mod tests {
         };
         // bodies are 200 vs 210 (95% similar — not divergent). Headers differ
         // in content-type, server, content-length (3 fields) → ≥2 → escape.
-        assert!(!control_indicates_false_positive(&attack, &control, None));
+        assert!(!control_indicates_false_positive(
+            &attack, &control, None, 1000
+        ));
     }
 
     #[test]
@@ -2349,7 +2374,9 @@ mod tests {
             ),
             is_connection_timeout: false,
         };
-        assert!(control_indicates_false_positive(&attack, &control, None));
+        assert!(control_indicates_false_positive(
+            &attack, &control, None, 1000
+        ));
     }
 
     #[test]
@@ -2379,7 +2406,8 @@ mod tests {
         assert!(!control_indicates_false_positive(
             &attack,
             &control,
-            Some(&followup)
+            Some(&followup),
+            1000
         ));
     }
 
@@ -2409,7 +2437,8 @@ mod tests {
         assert!(control_indicates_false_positive(
             &attack,
             &control,
-            Some(&followup)
+            Some(&followup),
+            1000
         ));
     }
 
@@ -2429,6 +2458,45 @@ mod tests {
         assert!(!followup_status_diverged(Some(502), Some(200)));
         assert!(!followup_status_diverged(Some(503), Some(200)));
         assert!(!followup_status_diverged(None, Some(200)));
+        // A flaky 5xx *baseline* is equally unreliable: a recovered backend
+        // answering 200 must not look like a desync.
+        assert!(!followup_status_diverged(Some(200), Some(503)));
+        assert!(!followup_status_diverged(Some(404), Some(502)));
+    }
+
+    #[test]
+    fn status_only_finding_survives_fast_non_timeout_control() {
+        let threshold = 1000u128;
+        // Fast 504 reproduced on the attack; stripped control answers a fast
+        // 200. The status flip is the evidence — timing similarity is
+        // irrelevant because no timing anomaly was ever claimed.
+        let attack = info(80, Some(504), false);
+        let control = |status_code: u16, is_connection_timeout: bool| ControlObservation {
+            duration: Duration::from_millis(60),
+            status_code: Some(status_code),
+            body_length: 0,
+            header_fingerprint: ResponseHeaderFingerprint::default(),
+            is_connection_timeout,
+        };
+        assert!(!control_indicates_false_positive(
+            &attack,
+            &control(200, false),
+            None,
+            threshold
+        ));
+        // Ambiguous controls still fall through to the timing rule and reject:
+        // 4xx parse rejection, flapping 5xx backend, a partly-timed-out control,
+        // or a control that also 504s (shape-intrinsic gateway error).
+        for ambiguous in [
+            control(400, false),
+            control(503, false),
+            control(200, true),
+            control(504, false),
+        ] {
+            assert!(control_indicates_false_positive(
+                &attack, &ambiguous, None, threshold
+            ));
+        }
     }
 
     #[test]
@@ -2510,7 +2578,9 @@ mod tests {
             is_connection_timeout: false,
         };
         // Both 504 would normally be FP, but body divergence overrides.
-        assert!(!control_indicates_false_positive(&attack, &control, None));
+        assert!(!control_indicates_false_positive(
+            &attack, &control, None, 1000
+        ));
     }
 
     #[test]
@@ -2539,7 +2609,7 @@ mod tests {
             second_request: false,
         };
         assert!(
-            control_indicates_false_positive(&attack, &control, Some(&single_flake)),
+            control_indicates_false_positive(&attack, &control, Some(&single_flake), 1000),
             "one flaky follow-up must not override the control rejection"
         );
     }
