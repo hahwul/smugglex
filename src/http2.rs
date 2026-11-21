@@ -19,8 +19,6 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio_rustls::TlsConnector;
 
 use crate::error::{Result, SmugglexError};
 use crate::model::{CheckResult, Confidence};
@@ -272,19 +270,6 @@ fn status_from_indexed(byte: u8) -> Option<u16> {
     }
 }
 
-async fn h2_connect(host: &str, port: u16) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
-    let connector = TlsConnector::from(std::sync::Arc::clone(crate::http::get_h2_tls_config()));
-    // Use the string address form (`host:port`) like the HTTP/1.1 path rather
-    // than the `(host, port)` tuple: the tuple treats a bracketed IPv6 literal
-    // `[::1]` as a hostname and fails to resolve, whereas `[::1]:port` parses as
-    // a socket address. The SNI name goes through the shared bracket-aware
-    // `server_name` helper.
-    let tcp = TcpStream::connect(crate::http::socket_address(host, port)).await?;
-    let dnsname = crate::http::server_name(host)?;
-    let tls = connector.connect(dnsname, tcp).await?;
-    Ok(tls)
-}
-
 /// Send one HTTP/2 request on a fresh connection and observe the response (or
 /// stall). `end_stream_on_headers` controls whether END_STREAM rides the
 /// HEADERS frame (the H2.CL/H2.TE attack: a declared body that is never sent)
@@ -304,17 +289,18 @@ async fn h2_probe(
     // same timeout as the exchange, so a hanging connect (timeout) was
     // classified as a stream stall — a false smuggling signal on hosts with
     // intermittently slow/hanging connects, while a connect *error* was benign.
-    let mut stream = match tokio::time::timeout(timeout, h2_connect(host, port)).await {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(_)) | Err(_) => {
-            return H2Outcome {
-                responded: false,
-                status: None,
-                reset: true,
-                duration: start.elapsed(),
-            };
-        }
-    };
+    let mut stream =
+        match tokio::time::timeout(timeout, crate::http::get_h2_stream(host, port)).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(_)) | Err(_) => {
+                return H2Outcome {
+                    responded: false,
+                    status: None,
+                    reset: true,
+                    duration: start.elapsed(),
+                };
+            }
+        };
 
     // Only a stall during the request/response exchange is the smuggling signal.
     // The exchange gets the FULL `timeout` budget measured from AFTER the connect,

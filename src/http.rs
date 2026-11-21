@@ -270,20 +270,34 @@ pub(crate) fn socket_address(host: &str, port: u16) -> String {
     }
 }
 
-/// A trait that combines AsyncRead and AsyncWrite.
-trait ReadWrite: AsyncRead + AsyncWrite {}
+/// A trait that combines AsyncRead and AsyncWrite for protocol clients sharing
+/// the direct/proxy transport setup.
+pub(crate) trait ReadWrite: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite> ReadWrite for T {}
 
+pub(crate) type BoxedStream = Box<dyn ReadWrite + Unpin + Send>;
+
 /// Creates a TCP or TLS stream, optionally through a proxy.
-async fn get_stream(
+async fn get_stream(host: &str, port: u16, use_tls: bool) -> Result<BoxedStream> {
+    get_stream_with_tls_config(host, port, use_tls, get_tls_config()).await
+}
+
+/// Creates an HTTP/2 TLS stream, honoring the same CONNECT proxy as the
+/// HTTP/1.x transport while advertising ALPN `h2` to the target.
+pub(crate) async fn get_h2_stream(host: &str, port: u16) -> Result<BoxedStream> {
+    get_stream_with_tls_config(host, port, true, get_h2_tls_config()).await
+}
+
+async fn get_stream_with_tls_config(
     host: &str,
     port: u16,
     use_tls: bool,
-) -> Result<Box<dyn ReadWrite + Unpin + Send>> {
+    target_tls_config: &Arc<rustls::ClientConfig>,
+) -> Result<BoxedStream> {
     if let Some(proxy_url) = get_proxy() {
-        get_stream_via_proxy(host, port, use_tls, proxy_url).await
+        get_stream_via_proxy(host, port, use_tls, proxy_url, target_tls_config).await
     } else {
-        get_stream_direct(host, port, use_tls).await
+        get_stream_direct(host, port, use_tls, target_tls_config).await
     }
 }
 
@@ -292,10 +306,11 @@ async fn get_stream_direct(
     host: &str,
     port: u16,
     use_tls: bool,
-) -> Result<Box<dyn ReadWrite + Unpin + Send>> {
+    target_tls_config: &Arc<rustls::ClientConfig>,
+) -> Result<BoxedStream> {
     let addr = socket_address(host, port);
     if use_tls {
-        let connector = TlsConnector::from(Arc::clone(get_tls_config()));
+        let connector = TlsConnector::from(Arc::clone(target_tls_config));
         let stream = TcpStream::connect(&addr).await?;
         let domain = server_name(host)?;
         let tls_stream = connector.connect(domain, stream).await?;
@@ -354,7 +369,8 @@ async fn get_stream_via_proxy(
     port: u16,
     use_tls: bool,
     proxy_url: &str,
-) -> Result<Box<dyn ReadWrite + Unpin + Send>> {
+    target_tls_config: &Arc<rustls::ClientConfig>,
+) -> Result<BoxedStream> {
     let proxy = Url::parse(proxy_url)
         .map_err(|e| SmugglexError::Io(format!("invalid proxy URL: {}", e)))?;
     // Only HTTP CONNECT proxies are implemented; guard here too so a library
@@ -405,7 +421,7 @@ async fn get_stream_via_proxy(
 
     // Now we have a tunnel; do TLS handshake if needed
     if use_tls {
-        let connector = TlsConnector::from(Arc::clone(get_tls_config()));
+        let connector = TlsConnector::from(Arc::clone(target_tls_config));
         let domain = server_name(host)?;
         let tls_stream = connector.connect(domain, transport).await?;
         Ok(Box::new(tls_stream))
@@ -1298,6 +1314,7 @@ kJ8CRz+khnaPy0Io4PLR\n\
             443,
             false,
             &format!("http://{proxy_addr}"),
+            get_tls_config(),
         )
         .await
         .unwrap();
@@ -1326,6 +1343,7 @@ kJ8CRz+khnaPy0Io4PLR\n\
             443,
             false,
             &format!("http://{proxy_addr}"),
+            get_tls_config(),
         )
         .await;
         assert!(
@@ -1333,6 +1351,52 @@ kJ8CRz+khnaPy0Io4PLR\n\
             "a 2xx line is not enough to establish a tunnel"
         );
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_connect_tunnels_h2_tls_to_the_target() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut connect = Vec::new();
+            let mut byte = [0u8; 1];
+            while !connect.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.unwrap();
+                connect.push(byte[0]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await
+                .unwrap();
+            let mut client_hello = vec![0u8; 4096];
+            let size = socket.read(&mut client_hello).await.unwrap();
+            client_hello.truncate(size);
+            (connect, client_hello)
+        });
+
+        let result = get_stream_via_proxy(
+            "target.example",
+            443,
+            true,
+            &format!("http://{proxy_addr}"),
+            get_h2_tls_config(),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "the mock proxy does not complete target TLS"
+        );
+
+        let (connect, client_hello) = server.await.unwrap();
+        assert_eq!(
+            connect,
+            b"CONNECT target.example:443 HTTP/1.1\r\nHost: target.example:443\r\n\r\n"
+        );
+        assert!(
+            client_hello.windows(2).any(|window| window == b"h2"),
+            "the tunneled ClientHello must advertise ALPN h2"
+        );
     }
 
     #[test]

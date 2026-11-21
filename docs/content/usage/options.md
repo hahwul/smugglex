@@ -45,7 +45,7 @@ With no `--checks`, smugglex runs the default set — `cl-te`, `te-cl`, `te-te`,
 
 `0-cl` is an opt-in `Expect: 100-continue`/body-pause probe. It reports only when an early response and a reproducible post-body response-queue change are both observed; a deadlock alone is recorded as a diagnostic.
 
-`h2-downgrade` speaks real HTTP/2 (ALPN `h2`) to detect H2.CL / H2.TE and only runs on `https` targets; it connects directly and does not route through `--proxy`.
+`h2-downgrade` speaks real HTTP/2 (ALPN `h2`) to detect H2.CL / H2.TE and only runs on `https` targets. When `--proxy` is set, the HTTP/2 connection uses the same CONNECT tunnel as the HTTP/1.x checks.
 
 `parser-discrepancy` is an opt-in differential audit. It compares a bounded corpus of CL/TE probes with framing-stripped controls and records status/body/timeout differences in JSON diagnostics; only repeatable timeout-backed differences are promoted to a vulnerability.
 
